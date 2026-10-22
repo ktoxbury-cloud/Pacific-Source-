@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repair Scheduler</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #fff; --ink: #1b1f24; --muted: #5f6b7a; --line: #dde1e6;
+    --accent: #1f6feb; --danger: #c62828; --ok: #2e7d32; --warn: #b26a00;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; background: var(--bg); color: var(--ink); }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 10px 16px; background: #14213d; color: #fff; }
+  header h1 { font-size: 18px; margin: 0 12px 0 0; }
+  header .counts span { margin-right: 14px; opacity: .9; }
+  header .spacer { flex: 1; }
+  button { font: inherit; border: 1px solid var(--line); background: #fff; color: var(--ink); padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.big { padding: 9px 16px; font-weight: 600; }
+  button.small { padding: 2px 8px; font-size: 12px; }
+  button:disabled { opacity: .5; cursor: default; }
+  input, select, textarea { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; width: 100%; background: #fff; color: var(--ink); }
+  textarea { min-height: 70px; resize: vertical; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 6px 0 2px; }
+  main { display: grid; grid-template-columns: 420px 1fr; gap: 12px; padding: 12px; height: calc(100vh - 56px); }
+  .col { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .panel h2 { font-size: 15px; margin: 0 0 8px; }
+  .row { display: flex; gap: 8px; align-items: end; }
+  .row > * { flex: 1; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
+  .tabs button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+  #jobs { overflow: auto; flex: 1; min-height: 120px; }
+  .job { border-bottom: 1px solid var(--line); padding: 7px 2px; }
+  .job:last-child { border-bottom: 0; }
+  .job .addr { font-weight: 600; cursor: pointer; }
+  .job .addr:hover { text-decoration: underline; }
+  .job .meta { color: var(--muted); font-size: 12px; }
+  .job .msg { color: var(--muted); font-size: 12px; font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .job .acts { margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 10px; background: #e8eaed; color: #333; margin-left: 4px; }
+  .tag.urgent { background: var(--danger); color: #fff; }
+  .tag.warn { background: #fff1d6; color: var(--warn); }
+  .tag.bad { background: #fde0e0; color: var(--danger); }
+  #map { flex: 1; min-height: 300px; border-radius: 10px; border: 1px solid var(--line); }
+  #plan { overflow: auto; max-height: 38vh; }
+  .crew { border-left: 6px solid #999; padding: 6px 10px; margin-bottom: 8px; background: #fafbfc; border-radius: 4px; }
+  .crew h3 { margin: 0 0 4px; font-size: 14px; }
+  .crew ol { margin: 0; padding-left: 20px; }
+  .crew li { margin: 2px 0; }
+  .msgbox { padding: 8px 10px; border-radius: 6px; margin-top: 8px; display: none; white-space: pre-wrap; }
+  .msgbox.show { display: block; }
+  .msgbox.ok { background: #e6f4ea; color: var(--ok); }
+  .msgbox.err { background: #fde0e0; color: var(--danger); }
+  details summary { cursor: pointer; font-weight: 600; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 8px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; height: auto; } #map { height: 60vh; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏠 Repair Scheduler</h1>
+  <div class="counts" id="counts"></div>
+  <div class="spacer"></div>
+  <button class="primary" id="syncBtn" title="Pull new calls, voicemails and texts from Quo">⟳ Sync from Quo</button>
+  <button id="settingsBtn">Settings</button>
+</header>
+<main>
+  <div class="col">
+    <div class="panel">
+      <h2>Add a job</h2>
+      <label>Address</label>
+      <input id="fAddress" placeholder="e.g. 11250 35 Ave NW   or   88 Somewhere Cres, St. Albert">
+      <div class="grid2">
+        <div><label>Name</label><input id="fName"></div>
+        <div><label>Phone</label><input id="fPhone"></div>
+      </div>
+      <label>Notes (what's wrong)</label>
+      <input id="fNotes" placeholder="shingles blown off back side, 2nd storey">
+      <div class="row" style="margin-top:8px">
+        <label style="flex:0 0 auto;margin:0"><input type="checkbox" id="fUrgent" style="width:auto"> Urgent / leaking</label>
+        <button class="primary" id="addBtn">Add</button>
+      </div>
+      <details style="margin-top:10px">
+        <summary>Paste a bunch at once</summary>
+        <label>One per line — addresses or whole text messages</label>
+        <textarea id="bulk" placeholder="10420 63A Street NW&#10;188 Someplace Wynd, Leduc - shingles off, Dave 780-555-0101"></textarea>
+        <div class="row" style="margin-top:6px">
+          <button id="bulkBtn">Add all</button>
+          <label style="margin:0">or CSV file <input type="file" id="csvFile" accept=".csv"></label>
+        </div>
+      </details>
+      <div class="msgbox" id="addMsg"></div>
+    </div>
+    <div class="panel" style="display:flex;flex-direction:column;flex:1;min-height:0">
+      <div class="tabs" id="tabs">
+        <button data-s="new" class="active">Waiting</button>
+        <button data-s="needs_address">Need address</button>
+        <button data-s="scheduled">Scheduled</button>
+        <button data-s="done">Done</button>
+        <button data-s="cancelled">Cancelled</button>
+      </div>
+      <div id="jobs"></div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="panel">
+      <h2>Build tomorrow's schedule</h2>
+      <div class="row">
+        <div><label>Date</label><input type="date" id="pDate"></div>
+        <div style="flex:2"><label>Crews (comma separated — names optional)</label><input id="pCrews"></div>
+      </div>
+      <div class="row">
+        <div><label>Max stops / crew</label><input type="number" id="pStops" min="1"></div>
+        <div><label>Minutes / job</label><input type="number" id="pMins" min="5"></div>
+        <div><label>Work hours</label><input type="number" id="pHours" step="0.5" min="1"></div>
+        <div><label>Group by</label>
+          <select id="pMode"><option value="priority">Oldest calls first</option><option value="area">Tightest areas</option></select></div>
+        <div><label>Preview days</label><input type="number" id="pDays" min="1" value="1"></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="planBtn" class="big">Preview</button>
+        <button id="exportBtn" class="primary big">Export day &amp; mark scheduled</button>
+        <button id="rollBtn" title="Put scheduled jobs that weren't marked done back in the waiting list">Return unfinished to queue</button>
+      </div>
+      <div class="msgbox" id="planMsg"></div>
+      <div id="plan"></div>
+    </div>
+    <div id="map"></div>
+  </div>
+</main>
+
+<dialog id="settings" style="max-width:560px;width:95%;border:1px solid var(--line);border-radius:10px">
+  <h2 style="margin-top:0">Settings</h2>
+  <label>Shop / start address (crews start here)</label><input id="sDepot">
+  <div class="grid2">
+    <div><label>Day starts at</label><input id="sStart" type="time"></div>
+    <div><label>Average driving speed (km/h)</label><input id="sSpeed" type="number"></div>
+  </div>
+  <label>Quo API key (Quo → Settings → API)</label><input id="sKey" placeholder="paste key">
+  <label>Quo inbox to read (name or number)</label><input id="sInbox">
+  <label>Numbers to ignore — crew & staff phones (comma separated)</label><textarea id="sIgnore"></textarea>
+  <label>First sync looks back (hours)</label><input id="sLook" type="number">
+  <label><input type="checkbox" id="sOnline" style="width:auto"> Look up addresses online (OpenStreetMap). Turn off if there's no internet.</label>
+  <div class="row" style="margin-top:12px">
+    <button id="sCancel">Close</button>
+    <button id="sSave" class="primary">Save</button>
+  </div>
+  <div class="msgbox" id="sMsg"></div>
+</dialog>
+
+<script>
+const COLORS = ["#1f77b4","#d62728","#2ca02c","#9467bd","#ff7f0e","#17becf","#8c564b","#e377c2","#7f7f7f","#bcbd22"];
+const QUALITY = {exact:["",""], manual:["",""], street:["street","warn"], grid:["approx","warn"],
+                 postal:["postal area only","bad"], town:["town only","bad"], "":["not on map","bad"]};
+let cfg = {}, status = "new", jobs = [], lastPlan = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function api(path, method="GET", body) {
+  const r = await fetch(path, {method, headers: {"Content-Type":"application/json"}, body: body ? JSON.stringify(body) : undefined});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+function msg(el, text, ok=true) { el.textContent = text; el.className = "msgbox show " + (ok ? "ok" : "err"); }
+
+// Map ---------------------------------------------------------------------
+// If the map library can't load (no internet), everything else still works.
+const HAS_MAP = typeof L !== "undefined";
+let map = null, layer = null, depotMarker = null;
+if (HAS_MAP) {
+  map = L.map("map").setView([53.5461, -113.4938], 10);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19, attribution: "© OpenStreetMap"}).addTo(map);
+  layer = L.layerGroup().addTo(map);
+} else {
+  document.getElementById("map").innerHTML = '<p style="padding:16px;color:#5f6b7a">Map unavailable (no internet). Schedules and exports still work.</p>';
+}
+
+function pin(color, label) {
+  return L.divIcon({className: "", iconSize: [24, 24], iconAnchor: [12, 12],
+    html: `<div style="background:${color};color:#fff;border:2px solid #fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;box-shadow:0 1px 3px rgba(0,0,0,.4)">${label}</div>`});
+}
+function drawDepot() {
+  if (!HAS_MAP) return;
+  if (depotMarker) depotMarker.remove();
+  depotMarker = L.marker([cfg.depot_lat, cfg.depot_lng], {icon: pin("#14213d", "★")}).bindPopup("Shop / start").addTo(map);
+}
+function jobPopup(j) {
+  return `<b>${esc(j.address)}</b><br>${esc(j.name)} ${esc(j.phone)}<br>${esc(j.issue)}${j.urgent ? " · <b style='color:#c62828'>URGENT</b>" : ""}<br><small>${esc((j.last_message||j.notes||"").slice(0,160))}</small><br><small>Drag the pin if it's in the wrong spot.</small>`;
+}
+function addJobMarker(j, color, label) {
+  if (j.lat == null) return null;
+  const m = L.marker([j.lat, j.lng], {icon: pin(color, label), draggable: true}).bindPopup(jobPopup(j)).addTo(layer);
+  m.on("dragend", async e => { const p = e.target.getLatLng(); await api(`/api/jobs/${j.id}`, "PATCH", {lat: p.lat, lng: p.lng}); loadJobs(); });
+  return m;
+}
+function drawJobs() {
+  if (!HAS_MAP) return;
+  if (lastPlan) return drawPlan(lastPlan);
+  layer.clearLayers();
+  const pts = [];
+  jobs.forEach(j => { if (addJobMarker(j, j.urgent ? "#c62828" : "#555", j.urgent ? "!" : "•")) pts.push([j.lat, j.lng]); });
+  if (pts.length) map.fitBounds(pts, {padding: [30, 30], maxZoom: 13});
+}
+function drawPlan(plan) {
+  if (!HAS_MAP) return;
+  layer.clearLayers();
+  const pts = [[cfg.depot_lat, cfg.depot_lng]];
+  const day = plan.days[0];
+  if (!day) return;
+  day.routes.forEach((r, i) => {
+    const color = COLORS[i % COLORS.length];
+    const line = [[cfg.depot_lat, cfg.depot_lng]];
+    r.stops.forEach(s => { addJobMarker(s.job, color, s.order); line.push([s.job.lat, s.job.lng]); pts.push([s.job.lat, s.job.lng]); });
+    L.polyline(line, {color, weight: 3, opacity: .7, dashArray: "6 6"}).addTo(layer);
+  });
+  map.fitBounds(pts, {padding: [30, 30], maxZoom: 13});
+}
+
+// Jobs list ---------------------------------------------------------------
+async function loadJobs() {
+  const data = await api(`/api/jobs?status=${status}`);
+  jobs = data.jobs;
+  const c = data.counts;
+  $("counts").innerHTML = `<span>Waiting: <b>${c.new||0}</b></span><span>Need address: <b>${c.needs_address||0}</b></span><span>Scheduled: <b>${c.scheduled||0}</b></span><span>Done: <b>${c.done||0}</b></span>`;
+  renderJobs();
+  if (status === "new") drawJobs();
+}
+function renderJobs() {
+  if (!jobs.length) { $("jobs").innerHTML = `<p style="color:var(--muted)">Nothing here.</p>`; return; }
+  $("jobs").innerHTML = jobs.map(j => {
+    const [qText, qCls] = QUALITY[j.geo_quality || ""] || ["", ""];
+    const when = j.received_at ? new Date(j.received_at).toLocaleString([], {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"}) : "";
+    const acts = [];
+    if (j.status !== "done") acts.push(`<button class="small" data-act="done" data-id="${j.id}">✔ Done</button>`);
+    if (j.status === "scheduled" || j.status === "cancelled" || j.status === "done") acts.push(`<button class="small" data-act="new" data-id="${j.id}">Back to waiting</button>`);
+    if (j.status !== "cancelled") acts.push(`<button class="small" data-act="cancelled" data-id="${j.id}">Cancel</button>`);
+    acts.push(`<button class="small" data-act="urgent" data-id="${j.id}">${j.urgent ? "Not urgent" : "Urgent"}</button>`);
+    acts.push(`<button class="small" data-act="delete" data-id="${j.id}">Delete</button>`);
+    return `<div class="job">
+      <div class="addr" data-edit="${j.id}" title="Click to edit address">${j.address ? esc(j.address) : "<i>No address yet — click to add</i>"}
+        ${j.urgent ? '<span class="tag urgent">URGENT</span>' : ""}${qText && j.address ? `<span class="tag ${qCls}">${qText}</span>` : ""}</div>
+      <div class="meta">${esc(j.name)} ${j.phone ? `· <a href="tel:${esc(j.phone)}">${esc(j.phone)}</a>` : ""} · ${esc(j.issue)} · ${when}
+        ${j.scheduled_date ? `· ${esc(j.crew)} ${esc(j.scheduled_date)} #${j.stop_order}` : ""} · ${esc(j.source)}</div>
+      ${j.last_message || j.notes ? `<div class="msg" title="${esc(j.last_message || j.notes)}">“${esc(j.last_message || j.notes)}”</div>` : ""}
+      <div class="acts">${acts.join("")}</div></div>`;
+  }).join("");
+}
+$("jobs").addEventListener("click", async e => {
+  const edit = e.target.closest("[data-edit]");
+  if (edit) {
+    const j = jobs.find(x => x.id == edit.dataset.edit);
+    const a = prompt("Address:", j.address || "");
+    if (a !== null && a.trim()) { await api(`/api/jobs/${j.id}`, "PATCH", {address: a}); loadJobs(); }
+    return;
+  }
+  const b = e.target.closest("button[data-act]");
+  if (!b) return;
+  const id = b.dataset.id, act = b.dataset.act, j = jobs.find(x => x.id == id);
+  if (act === "delete") { if (!confirm("Delete this job?")) return; await api(`/api/jobs/${id}`, "DELETE"); }
+  else if (act === "urgent") await api(`/api/jobs/${id}`, "PATCH", {urgent: !j.urgent});
+  else await api(`/api/jobs/${id}`, "PATCH", {status: act === "new" && !j.address ? "needs_address" : act});
+  loadJobs();
+});
+$("tabs").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  [...$("tabs").children].forEach(x => x.classList.toggle("active", x === b));
+  status = b.dataset.s; loadJobs();
+});
+
+// Adding ------------------------------------------------------------------
+$("addBtn").onclick = async () => {
+  try {
+    const d = await api("/api/jobs", "POST", {address: $("fAddress").value, name: $("fName").value, phone: $("fPhone").value,
+                                              notes: $("fNotes").value, urgent: $("fUrgent").checked || null});
+    const [qText] = QUALITY[d.job.geo_quality || ""] || [""];
+    msg($("addMsg"), `Added: ${d.job.address || "(no address)"}${qText ? " — " + qText + ", check the pin" : ""}`, !!d.job.lat);
+    ["fAddress","fName","fPhone","fNotes"].forEach(i => $(i).value = ""); $("fUrgent").checked = false; $("fAddress").focus();
+    lastPlan = null; loadJobs();
+  } catch (err) { msg($("addMsg"), err.message, false); }
+};
+$("fAddress").addEventListener("keydown", e => { if (e.key === "Enter") $("addBtn").click(); });
+$("bulkBtn").onclick = async () => {
+  const d = await api("/api/jobs/bulk", "POST", {text: $("bulk").value});
+  msg($("addMsg"), `Added ${d.added} jobs.`); $("bulk").value = ""; lastPlan = null; loadJobs();
+};
+$("csvFile").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const d = await api("/api/import-csv", "POST", {csv: await f.text()});
+  msg($("addMsg"), `Imported ${d.added} jobs from ${f.name}.`); e.target.value = ""; lastPlan = null; loadJobs();
+};
+
+// Sync --------------------------------------------------------------------
+$("syncBtn").onclick = async () => {
+  const b = $("syncBtn"); b.disabled = true; b.textContent = "Syncing…";
+  try {
+    const d = await api("/api/sync", "POST", {});
+    alert(`Quo sync (${d.inbox}):\n${d.created} new jobs, ${d.updated} updated, ${d.needs_address} still need an address.`);
+    lastPlan = null; loadJobs();
+  } catch (err) { alert("Sync failed: " + err.message); }
+  b.disabled = false; b.textContent = "⟳ Sync from Quo";
+};
+
+// Planning ----------------------------------------------------------------
+function planBody() {
+  return {date: $("pDate").value, crews: $("pCrews").value, max_stops_per_crew: +$("pStops").value,
+          minutes_per_job: +$("pMins").value, day_hours: +$("pHours").value, mode: $("pMode").value,
+          days: +$("pDays").value || 1};
+}
+function renderPlan(p) {
+  let h = "";
+  p.days.forEach((d, di) => {
+    h += `<h3 style="margin:8px 0 4px">${new Date(d.date + "T12:00").toLocaleDateString([], {weekday:"long", month:"short", day:"numeric"})}${di === 0 ? " (on the map)" : ""}</h3>`;
+    d.routes.forEach((r, i) => {
+      h += `<div class="crew" style="border-left-color:${COLORS[i % COLORS.length]}">
+        <h3>${esc(r.crew)} — ${r.stops.length} stops · ${esc(r.area)} · ~${Math.round(r.drive_km)} km · ~${(r.total_minutes/60).toFixed(1)} h ${r.overloaded ? '<span class="tag bad">long day</span>' : ""}</h3>
+        <ol>${r.stops.map(s => `<li>${esc(s.arrive)} — ${esc(s.job.address)} ${s.job.urgent ? '<span class="tag urgent">!</span>' : ""} <span style="color:var(--muted)">${esc(s.job.name)}</span></li>`).join("")}</ol></div>`;
+    });
+  });
+  if (p.leftover) h += `<p><b>${p.leftover}</b> more waiting jobs don't fit in ${p.days.length} day(s) — at this pace you're about ${Math.ceil((p.scheduled + p.leftover) / Math.max(1, p.scheduled / p.days.length))} days out.</p>`;
+  if (p.unplaced.length) h += `<p class="tag bad" style="display:inline-block;padding:4px 8px">${p.unplaced.length} job(s) couldn't be put on the map — fix their address in the list.</p>`;
+  $("plan").innerHTML = h || "<p>No waiting jobs to schedule.</p>";
+}
+$("planBtn").onclick = async () => {
+  try { lastPlan = await api("/api/plan", "POST", planBody()); renderPlan(lastPlan); drawPlan(lastPlan); $("planMsg").className = "msgbox"; }
+  catch (err) { msg($("planMsg"), err.message, false); }
+};
+$("exportBtn").onclick = async () => {
+  if (!confirm("Export this day's schedule and mark those jobs as scheduled?")) return;
+  try {
+    const d = await api("/api/export", "POST", planBody());
+    $("planMsg").innerHTML = `Exported ${d.scheduled} jobs for ${esc(d.date)}: ` + d.files.map(f => `<a href="${f}" target="_blank">${esc(f.split("/").pop())}</a>`).join(" · ") + `<br><small>Saved in ${esc(d.paths[0].replace(/[^\\/]+$/, ""))}</small>`;
+    $("planMsg").className = "msgbox show ok";
+    window.open(d.files.find(f => f.endsWith(".html")), "_blank");
+    lastPlan = null; $("plan").innerHTML = ""; loadJobs();
+  } catch (err) { msg($("planMsg"), err.message, false); }
+};
+$("rollBtn").onclick = async () => {
+  if (!confirm("Move every scheduled job that isn't marked Done back to the waiting list?")) return;
+  const d = await api("/api/rollover", "POST", {});
+  msg($("planMsg"), `${d.returned} unfinished jobs are back in the waiting list (they keep their original call date, so they go first).`);
+  loadJobs();
+};
+
+// Settings ----------------------------------------------------------------
+function fillSettings() {
+  $("pCrews").value = (cfg.crews || []).join(", ");
+  $("pStops").value = cfg.max_stops_per_crew; $("pMins").value = cfg.minutes_per_job; $("pHours").value = cfg.day_hours; $("pMode").value = cfg.mode;
+  $("sDepot").value = cfg.depot_address; $("sStart").value = cfg.start_time; $("sSpeed").value = cfg.avg_speed_kmh;
+  $("sKey").value = cfg.quo_api_key; $("sInbox").value = cfg.quo_inbox; $("sIgnore").value = (cfg.ignore_numbers || []).join(", ");
+  $("sLook").value = cfg.sync_lookback_hours; $("sOnline").checked = !!cfg.online_geocoding;
+  $("syncBtn").title = cfg.quo_connected ? "Pull new calls, voicemails and texts from Quo" : "Add your Quo API key in Settings first";
+}
+$("settingsBtn").onclick = () => { $("sMsg").className = "msgbox"; $("settings").showModal(); };
+$("sCancel").onclick = () => $("settings").close();
+$("sSave").onclick = async () => {
+  try {
+    cfg = await api("/api/config", "POST", {depot_address: $("sDepot").value, start_time: $("sStart").value, avg_speed_kmh: +$("sSpeed").value,
+      quo_api_key: $("sKey").value, quo_inbox: $("sInbox").value, ignore_numbers: $("sIgnore").value,
+      sync_lookback_hours: +$("sLook").value, online_geocoding: $("sOnline").checked,
+      crews: $("pCrews").value, max_stops_per_crew: +$("pStops").value, minutes_per_job: +$("pMins").value,
+      day_hours: +$("pHours").value, mode: $("pMode").value});
+    fillSettings(); drawDepot(); msg($("sMsg"), "Saved.");
+  } catch (err) { msg($("sMsg"), err.message, false); }
+};
+
+(async function init() {
+  cfg = await api("/api/config");
+  const t = new Date(); t.setDate(t.getDate() + 1);
+  $("pDate").value = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+  fillSettings(); drawDepot(); loadJobs();
+})();
+</script>
+</body>
+</html>
