@@ -1,0 +1,1206 @@
+<title>Kodiak Repair Scheduler</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: dispatch board. Sticky toolbar, then a two-column desk: job queue on the left, map + crew routes on the right. Stacks on phones. */
+:root {
+  --bg: #eef0f2;
+  --panel: #ffffff;
+  --ink: #1d232b;
+  --muted: #5d6874;
+  --line: #d6dbe0;
+  --chip: #e6e9ed;
+  --accent: #c8541b;
+  --accent-ink: #ffffff;
+  --bar: #1f2a36;
+  --bar-ink: #f2f4f6;
+  --urgent: #c62828;
+  --urgent-soft: #fbe3e1;
+  --warn: #8a5a00;
+  --warn-soft: #fbefd5;
+  --ok: #2c6e3a;
+  --ok-soft: #e1f1e4;
+  --map-bg: #f7f8f9;
+  --map-road: #c9d0d7;
+  --map-road-major: #aab4be;
+  --map-label: #7b8691;
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", Roboto, Arial, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161b; --panel: #1a2028; --ink: #e7ebef; --muted: #9aa5b1; --line: #2c3540; --chip: #26303b;
+    --accent: #e8743a; --accent-ink: #1a1007; --bar: #0b0e12; --bar-ink: #e7ebef;
+    --urgent: #ef6b62; --urgent-soft: #3a1d1c; --warn: #e7b85c; --warn-soft: #3a2f17; --ok: #7ccf8b; --ok-soft: #1c3322;
+    --map-bg: #151a20; --map-road: #2a333d; --map-road-major: #3a4652; --map-label: #7f8b97;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161b; --panel: #1a2028; --ink: #e7ebef; --muted: #9aa5b1; --line: #2c3540; --chip: #26303b;
+  --accent: #e8743a; --accent-ink: #1a1007; --bar: #0b0e12; --bar-ink: #e7ebef;
+  --urgent: #ef6b62; --urgent-soft: #3a1d1c; --warn: #e7b85c; --warn-soft: #3a2f17; --ok: #7ccf8b; --ok-soft: #1c3322;
+  --map-bg: #151a20; --map-road: #2a333d; --map-road-major: #3a4652; --map-label: #7f8b97;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.45; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bar); }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border: 1px solid var(--line); background: var(--panel); color: var(--ink); border-radius: 6px; padding: 6px 12px; }
+button:hover { border-color: var(--muted); }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.small { padding: 2px 8px; font-size: 12px; }
+button:disabled { opacity: .55; cursor: default; }
+input, select, textarea { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+textarea { min-height: 72px; resize: vertical; }
+label.f { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 3px; }
+.num { font-family: var(--font-data); font-variant-numeric: tabular-nums; }
+
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bar); color: var(--bar-ink);
+  padding-block: 10px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; }
+.bar h1 { font-size: 17px; font-weight: 800; letter-spacing: .01em; }
+.bar h1 span { color: var(--accent); }
+.tallies { display: flex; gap: 6px; flex-wrap: wrap; }
+.tally { font-size: 12px; padding: 3px 9px; border-radius: 99px; background: rgba(255,255,255,.08); white-space: nowrap; }
+.tally b { font-family: var(--font-data); font-weight: 500; }
+.bar .grow { flex: 1; }
+.bar button { background: transparent; color: var(--bar-ink); border-color: rgba(255,255,255,.25); }
+.bar button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+.notice { margin: 12px max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px)); padding: 10px 12px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); }
+.desk { display: grid; grid-template-columns: minmax(320px, 430px) minmax(0, 1fr); gap: 14px; align-items: start;
+  padding-block: 14px 24px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; min-width: 0; }
+.panel h2 { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+.sub { color: var(--muted); font-size: 12px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; }
+.row > .cell { flex: 1 1 110px; min-width: 0; }
+.msg { margin-top: 10px; padding: 8px 10px; border-radius: 6px; font-size: 13px; }
+.msg.ok { background: var(--ok-soft); color: var(--ok); }
+.msg.err { background: var(--urgent-soft); color: var(--urgent); }
+.msg.info { background: var(--chip); color: var(--ink); }
+details > summary { cursor: pointer; font-weight: 600; margin-top: 10px; }
+
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 2px 0 10px; }
+.tabs button { border-radius: 99px; font-size: 13px; padding: 4px 11px; }
+.tabs button[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.tabs .n { font-family: var(--font-data); font-size: 11px; margin-left: 3px; opacity: .8; }
+.joblist { max-height: 70vh; overflow: auto; margin: 0 -4px; padding: 0 4px; }
+.job { display: grid; grid-template-columns: 4px minmax(0, 1fr); gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+.job:first-child { border-top: 0; }
+.job .stripe { border-radius: 2px; background: var(--line); }
+.job.urgent .stripe { background: var(--urgent); }
+.job.sel { background: var(--chip); border-radius: 6px; }
+.job .addr { font-weight: 600; cursor: pointer; overflow-wrap: anywhere; }
+.job .addr:hover { text-decoration: underline; }
+.job .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.job .quote { color: var(--muted); font-size: 12px; font-style: italic; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.job .acts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+.chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 0 7px; border-radius: 99px; background: var(--chip); color: var(--muted); margin-left: 4px; vertical-align: 1px; }
+.chip.urgent { background: var(--urgent); color: #fff; }
+.chip.warn { background: var(--warn-soft); color: var(--warn); }
+.chip.bad { background: var(--urgent-soft); color: var(--urgent); }
+.chip.ex { background: var(--chip); color: var(--muted); border: 1px dashed var(--muted); }
+.edit { display: flex; gap: 6px; margin-top: 4px; }
+.empty { color: var(--muted); padding: 18px 4px; }
+.empty b { color: var(--ink); }
+
+.mapwrap { position: relative; }
+#map text { paint-order: stroke; stroke: var(--map-bg); stroke-width: 3px; stroke-linejoin: round; }
+#map .pin text { stroke: none; }
+#map { width: 100%; height: 440px; display: block; background: var(--map-bg); border: 1px solid var(--line); border-radius: 8px; touch-action: manipulation; }
+.maptools { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; }
+.maptools button { font-size: 12px; padding: 3px 9px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+
+.routes { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 10px; }
+.route { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; border-top: 4px solid var(--c); }
+.route h3 { font-size: 14px; display: flex; justify-content: space-between; gap: 8px; }
+.route .stats { font-size: 12px; color: var(--muted); margin: 2px 0 6px; }
+.route ol { margin: 0; padding-left: 22px; }
+.route li { margin: 3px 0; overflow-wrap: anywhere; }
+.route li .t { font-family: var(--font-data); font-size: 12px; color: var(--muted); }
+.route .links { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.route a { color: var(--accent); }
+.dayhead { font-family: var(--font-display); font-size: 14px; margin-top: 14px; }
+.ahead { margin-top: 10px; font-size: 13px; }
+
+.exports .ex { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.exports .ex:first-child { border-top: 0; }
+.exports .ex .grow { flex: 1 1 160px; }
+
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); width: min(560px, calc(100vw - 32px)); padding: 18px; }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+.confirm { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: var(--warn-soft); color: var(--warn); }
+
+@media (max-width: 860px) {
+  .desk { grid-template-columns: minmax(0, 1fr); }
+  .joblist { max-height: none; }
+  #map { height: 340px; }
+}
+@media (prefers-reduced-motion: no-preference) { .job, .route { transition: background-color .15s; } }
+</style>
+
+<header class="bar">
+  <h1>Kodiak <span>Repair</span> Scheduler</h1>
+  <div class="tallies" id="tallies"></div>
+  <div class="grow"></div>
+  <button id="syncBtn" class="primary" type="button">Sync from Quo</button>
+  <button id="settingsBtn" type="button">Settings</button>
+</header>
+<div class="notice" id="notice" hidden></div>
+
+<main class="desk">
+  <section class="stack">
+    <div class="panel">
+      <h2>Add a job</h2>
+      <p class="sub">Type it however the customer said it: "11250 35 ave NW", "88 Sample Cres St. Albert".</p>
+      <form id="addForm" autocomplete="off">
+        <label class="f" for="fAddress">Address</label>
+        <input id="fAddress" placeholder="e.g. 11250 35 Ave NW">
+        <div class="row">
+          <div class="cell"><label class="f" for="fName">Name</label><input id="fName"></div>
+          <div class="cell"><label class="f" for="fPhone">Phone</label><input id="fPhone" inputmode="tel"></div>
+        </div>
+        <label class="f" for="fNotes">What's wrong</label>
+        <input id="fNotes" placeholder="shingles off the back, 2 storey">
+        <div class="row" style="margin-top:10px;align-items:center;justify-content:space-between">
+          <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="fUrgent" style="width:auto"> Leaking / urgent</label>
+          <button class="primary" type="submit">Add job</button>
+        </div>
+      </form>
+      <details>
+        <summary>Paste a bunch at once</summary>
+        <label class="f" for="bulk">One per line: addresses, or whole text messages</label>
+        <textarea id="bulk" placeholder="10420 63A Street NW&#10;188 Sample Wynd, Leduc - shingles off, Dave 780-555-0101"></textarea>
+        <div class="row" style="margin-top:8px"><button id="bulkBtn" type="button">Add all lines</button></div>
+      </details>
+      <div id="addMsg"></div>
+    </div>
+
+    <div class="panel">
+      <div class="tabs" id="tabs" role="group" aria-label="Job status"></div>
+      <div class="joblist" id="jobs"></div>
+    </div>
+  </section>
+
+  <section class="stack">
+    <div class="panel">
+      <h2>Tomorrow's routes</h2>
+      <p class="sub">Groups waiting jobs by area. Leaks go first, then oldest calls. Nothing is booked until you export.</p>
+      <div class="row">
+        <div class="cell" style="flex:1 1 140px"><label class="f" for="pDate">Day</label><input type="date" id="pDate"></div>
+        <div class="cell" style="flex:3 1 220px"><label class="f" for="pCrews">Crews (names optional)</label><input id="pCrews" placeholder="Crew 1, Crew 2, Crew 3"></div>
+      </div>
+      <div class="row">
+        <div class="cell"><label class="f" for="pStops">Max stops / crew</label><input type="number" id="pStops" min="1" max="30"></div>
+        <div class="cell"><label class="f" for="pMins">Minutes / job</label><input type="number" id="pMins" min="5" max="480"></div>
+        <div class="cell"><label class="f" for="pHours">Work hours</label><input type="number" id="pHours" min="1" max="16" step="0.5"></div>
+        <div class="cell"><label class="f" for="pMode">Group by</label>
+          <select id="pMode"><option value="priority">Oldest calls first</option><option value="area">Tightest areas</option></select></div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button id="exportBtn" class="primary" type="button">Export this day</button>
+        <button id="rollBtn" type="button">Return unfinished to queue</button>
+      </div>
+      <div id="planConfirm"></div>
+      <div id="planMsg"></div>
+      <div class="mapwrap" style="margin-top:12px">
+        <svg id="map" role="img" aria-label="Map of jobs and crew routes"></svg>
+        <div class="maptools"><button id="fitBtn" type="button">Fit jobs</button><button id="metroBtn" type="button">Whole area</button></div>
+      </div>
+      <div class="legend" id="legend"></div>
+      <div id="plan"></div>
+    </div>
+
+    <div class="panel exports">
+      <h2>Exported schedules</h2>
+      <p class="sub">Download printable crew sheets or a spreadsheet, or copy a crew's day to text them.</p>
+      <div id="exports"></div>
+    </div>
+  </section>
+</main>
+
+<dialog id="settings">
+  <h2 style="font-size:17px">Settings</h2>
+  <form id="settingsForm" method="dialog">
+    <label class="f" for="sDepot">Shop / where crews start (address)</label><input id="sDepot">
+    <div class="row">
+      <div class="cell"><label class="f" for="sStart">Day starts</label><input id="sStart" type="time"></div>
+      <div class="cell"><label class="f" for="sSpeed">Avg driving speed (km/h)</label><input id="sSpeed" type="number" min="10" max="100"></div>
+    </div>
+    <label class="f" for="sInbox">Quo inbox to read</label><input id="sInbox" placeholder="Kodiak Roofing">
+    <label class="f" for="sIgnore">Phone numbers to ignore: crew and office cells (comma separated)</label><textarea id="sIgnore"></textarea>
+    <label class="f" for="sLook">First sync looks back (hours)</label><input id="sLook" type="number" min="1" max="720">
+    <label style="display:flex;gap:6px;align-items:center;margin-top:10px"><input type="checkbox" id="sTranscripts" style="width:auto"> Also read answered-call transcripts (slower; Quo Business plan)</label>
+    <div class="row" style="margin-top:14px;justify-content:flex-end">
+      <button type="button" id="sClose">Close</button>
+      <button type="button" class="primary" id="sSave">Save settings</button>
+    </div>
+    <div id="sMsg"></div>
+    <details>
+      <summary>Example data</summary>
+      <p class="sub">Adds 30 made-up storm calls (marked "example") so you can try the routing. Remove them before real use.</p>
+      <div class="row"><button type="button" id="exAdd">Add examples</button><button type="button" id="exClear">Remove examples</button></div>
+    </details>
+  </form>
+</dialog>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------------------
+// Address reading (same rules as the desktop version)
+// ---------------------------------------------------------------------------
+const TOWNS = {
+  "Edmonton": [53.5461, -113.4938, ["edmonton", "edm", "yeg"]],
+  "Sherwood Park": [53.5413, -113.2958, ["sherwood park", "sherwood pk", "strathcona county"]],
+  "St. Albert": [53.6305, -113.6256, ["st. albert", "st albert", "saint albert", "st.albert"]],
+  "Spruce Grove": [53.5450, -113.9008, ["spruce grove"]],
+  "Stony Plain": [53.5264, -114.0026, ["stony plain"]],
+  "Leduc": [53.2594, -113.5492, ["leduc"]],
+  "Nisku": [53.3370, -113.5310, ["nisku"]],
+  "Beaumont": [53.3572, -113.4147, ["beaumont"]],
+  "Fort Saskatchewan": [53.7128, -113.2134, ["fort saskatchewan", "fort sask", "ft sask", "ft. sask", "fort sk"]],
+  "Devon": [53.3636, -113.7322, ["devon"]],
+  "Morinville": [53.8022, -113.6497, ["morinville"]],
+  "Gibbons": [53.8283, -113.3264, ["gibbons"]],
+  "Bon Accord": [53.8364, -113.4171, ["bon accord"]],
+  "Legal": [53.9500, -113.5833, ["legal, ab", "legal alberta", "town of legal"]],
+  "Calmar": [53.2650, -113.8186, ["calmar"]],
+  "Ardrossan": [53.5560, -113.1440, ["ardrossan"]],
+  "Acheson": [53.5500, -113.7700, ["acheson"]],
+  "Enoch": [53.5000, -113.8000, ["enoch"]],
+  "Villeneuve": [53.6600, -113.8200, ["villeneuve"]],
+  "Cardiff": [53.7600, -113.6100, ["cardiff"]],
+  "Namao": [53.7100, -113.5000, ["namao"]],
+  "Onoway": [53.7032, -114.1980, ["onoway"]],
+  "Val Quentin": [53.6900, -114.2900, ["val quentin"]],
+  "Wabamun": [53.5600, -114.4700, ["wabamun"]],
+  "Thorsby": [53.2300, -114.0500, ["thorsby"]],
+  "Millet": [53.0967, -113.4744, ["millet"]],
+  "Wetaskiwin": [52.9694, -113.3769, ["wetaskiwin"]],
+  "Camrose": [53.0167, -112.8350, ["camrose"]],
+  "Tofield": [53.3700, -112.6700, ["tofield"]],
+  "Lamont": [53.7600, -112.7800, ["lamont"]],
+  "Bruderheim": [53.8000, -112.9300, ["bruderheim"]],
+  "Redwater": [53.9500, -113.1100, ["redwater"]],
+  "Westlock": [54.1500, -113.8600, ["westlock"]],
+  "Drayton Valley": [53.2200, -114.9800, ["drayton valley"]],
+};
+const STREET_TYPES = "street|st|avenue|ave|av|road|rd|drive|dr|crescent|cres|cr|close|cl|way|boulevard|blvd|court|crt|ct|place|pl|lane|ln|link|wynd|green|grn|point|pt|cove|trail|trl|tr|park|gate|bay|landing|terrace|ter|heights|hts|view|vista|circle|cir|square|sq|row|common|commons|mews|manor|grove|ridge|hill|bend|crossing|run|rise|plaza|walk|loop|vale|glen|gardens|garden|meadow|meadows|key|harbour|parade|path|wood|woods|estates|haven|hollow|knoll|lookout|bluff|chase|wharf|promenade|pointe";
+const STOP = "the|a|an|on|in|at|to|for|of|and|or|is|are|am|pm|my|your|our|it|its|this|that|we|i|you|me|be|so|if|no|yes|with|from|all|more|out|was|will|can|just|get|got|hours?|mins?|minutes?|days?|weeks?|bundles?|shingles?|squares?|feet|ft|sq|dollars?|bucks|years?|times?|people|guys|pieces?|boxes|rolls?|tabs?";
+const QUAD = String.raw`(?:north\s?west|south\s?west|north\s?east|south\s?east|n\.?\s?w\.?|s\.?\s?w\.?|n\.?\s?e\.?|s\.?\s?e\.?)(?![a-z])`;
+const ADDRESS_SRC = String.raw`(?<unit>(?:(?:unit|suite|apt|apartment|#)\s*#?\s*[0-9a-z]{1,5}\s*[,\-]?\s*)?)(?<![\d.$/:])\b(?<num>\d{1,6}[a-z]?)\b\s*(?:-\s*)?,?\s*(?<street>(?<numbered>\d{1,3})\s?(?:st|nd|rd|th)?\s?(?<letter>[a-z])?\s+(?<ntype>street|st|avenue|ave|av)\b\.?|(?<rural>range\s+road|rge\.?\s+rd|rng\s+rd|rr|township\s+road|twp\.?\s+rd|twp|highway|hwy)\s*(?<ruralnum>\d{1,4}[a-z]?)\b|(?<named>(?:(?!(?:${STOP})\b)[a-z][a-z'.]*\s+){1,3}?)(?<stype>${STREET_TYPES})\b\.?)(?<quad>\s*,?\s*${QUAD})?`;
+const POSTAL_RE = /\b([abceghj-nprstvxy]\d[abceghj-nprstv-z])\s?(\d[abceghj-nprstv-z]\d)\b/i;
+const TYPE_CANON = { st: "St", street: "St", ave: "Ave", av: "Ave", avenue: "Ave", rd: "Rd", road: "Rd", dr: "Dr", drive: "Dr",
+  cres: "Cres", crescent: "Cres", cr: "Cres", cl: "Close", close: "Close", blvd: "Blvd", boulevard: "Blvd", ct: "Crt", crt: "Crt",
+  court: "Crt", pl: "Pl", place: "Pl", ln: "Lane", lane: "Lane", pt: "Point", point: "Point", grn: "Green", tr: "Trail", trl: "Trail",
+  trail: "Trail", ter: "Terrace", hts: "Heights", cir: "Circle", sq: "Square" };
+const QUAD_CANON = { northwest: "NW", southwest: "SW", northeast: "NE", southeast: "SE" };
+const FSA_TOWN = { T8A: "Sherwood Park", T8B: "Sherwood Park", T8C: "Sherwood Park", T8E: "Sherwood Park", T8G: "Sherwood Park", T8H: "Sherwood Park",
+  T8N: "St. Albert", T8T: "St. Albert", T7X: "Spruce Grove", T7Y: "Spruce Grove", T7Z: "Stony Plain", T9E: "Leduc", T4X: "Beaumont",
+  T8L: "Fort Saskatchewan", T9G: "Devon", T8R: "Morinville", T4V: "Camrose", T9A: "Wetaskiwin" };
+
+function escRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function findTown(text) {
+  const low = " " + String(text || "").toLowerCase().replace(/\s+/g, " ") + " ";
+  let best = "", pos = Infinity;
+  for (const [town, [, , aliases]] of Object.entries(TOWNS)) {
+    for (const a of aliases) {
+      const m = new RegExp("(?<![a-z])" + escRe(a) + "(?![a-z])").exec(low);
+      if (m && m.index < pos) { best = town; pos = m.index; }
+    }
+  }
+  return best;
+}
+function findPostal(text) { const m = POSTAL_RE.exec(text || ""); return m ? (m[1] + " " + m[2]).toUpperCase() : ""; }
+function townFromPostal(p) { const f = p.slice(0, 3).toUpperCase(); return /^T[56]/.test(f) ? "Edmonton" : (FSA_TOWN[f] || ""); }
+function cap(w) { w = w.replace(/\./g, ""); return /^mc./i.test(w) ? "Mc" + w[2].toUpperCase() + w.slice(3).toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(); }
+
+function extractAddresses(text) {
+  const out = [];
+  if (!text) return out;
+  const re = new RegExp(ADDRESS_SRC, "gi");
+  for (const m of String(text).matchAll(re)) {
+    const g = m.groups;
+    const num = g.num.toUpperCase();
+    const unit = (g.unit || "").trim().replace(/^[,\-\s]+|[,\-\s]+$/g, "").replace(/^(unit|suite|apt|apartment|#)\s*#?\s*/i, "").toUpperCase();
+    let quad = (g.quad || "").replace(/[\s.,]/g, "").toLowerCase();
+    quad = QUAD_CANON[quad] || quad.toUpperCase();
+    let street, numbered = null, kind = "", rural = false;
+    if (g.numbered) {
+      numbered = parseInt(g.numbered, 10);
+      kind = TYPE_CANON[g.ntype.toLowerCase()];
+      street = `${numbered}${(g.letter || "").toUpperCase()} ${kind}`;
+    } else if (g.rural) {
+      rural = true;
+      const r = g.rural.toLowerCase();
+      const label = /^(range|rge|rng|rr)/.test(r) ? "Range Rd" : /^(town|twp)/.test(r) ? "Township Rd" : "Hwy";
+      street = `${label} ${g.ruralnum.toUpperCase()}`;
+    } else {
+      const words = g.named.trim().split(/\s+/).map(cap);
+      street = words.join(" ") + " " + (TYPE_CANON[g.stype.toLowerCase()] || cap(g.stype));
+    }
+    const tail = String(text).slice(m.index + m[0].length, m.index + m[0].length + 70).split(/[\n!?]/)[0];
+    let town = findTown(tail);
+    const postal = findPostal(tail);
+    if (!town && postal) town = townFromPostal(postal);
+    if (numbered !== null && !quad && (town === "" || town === "Edmonton")) quad = "NW";
+    let line = `${num} ${street}` + (quad ? ` ${quad}` : "");
+    if (unit) line = `Unit ${unit}, ${line}`;
+    out.push({ text: `${line}, ${town || "Edmonton"}, AB${postal ? " " + postal : ""}`, num, street, quad, unit, town, postal, numbered, kind, rural });
+  }
+  return out;
+}
+function extractAddress(text) { return extractAddresses(text)[0] || null; }
+
+const NAME_RE = /(?:[Mm]y name is|[Tt]his is|[Ii]t'?s|[Ii] am|[Ii]'?m|[Nn]ame'?s|[Nn]ame:)\s+([A-Z][a-z]+(?:\s+(?:[A-Z][a-z]+|Mac[A-Z][a-z]+|Mc[A-Z][a-z]+))?)/g;
+const NAME_BLOCK = new Set(["Kodiak", "Hi", "Hello", "Just", "Wondering", "Calling", "Here", "Sorry", "Not", "Going"]);
+function findName(text) { for (const m of String(text || "").matchAll(NAME_RE)) if (!NAME_BLOCK.has(m[1].split(/\s+/)[0])) return m[1]; return ""; }
+const ISSUES = [
+  ["Leak", /leak|leaking|water (?:coming|is coming|dripping|in)|dripping|drips|ceiling stain|water damage/i],
+  ["Shingle blow-off", /blow[n\s-]*off|blew off|blown|missing shingles?|shingles? (?:off|missing|gone|flew|came off|ripped)|wind (?:damage|storm)|torn shingles?|lifted/i],
+  ["Hail damage", /\bhail/i],
+  ["Flashing / vents", /flashing|vent|chimney|skylight|ridge cap/i],
+  ["Eaves / gutters", /eaves|eavestrough|gutter|downspout|soffit|fascia/i],
+  ["Siding", /siding/i],
+];
+const URGENT_RE = /leak|leaking|water (?:coming|is coming|dripping|in)|dripping|tarp|urgent|asap|emergency|exposed|open to|rain (?:coming|tonight|tomorrow)|insurance adjuster/i;
+function classify(text) { text = text || ""; const hit = ISSUES.find(([, re]) => re.test(text)); return { issue: hit ? hit[0] : "Roof repair", urgent: URGENT_RE.test(text) }; }
+function normPhone(raw) {
+  const d = String(raw || "").replace(/\D/g, "");
+  if (d.length === 10) return "+1" + d;
+  if (d.length === 11 && d[0] === "1") return "+" + d;
+  return "";
+}
+const PHONE_IN_TEXT = /(?:\+?1[\s.-]?)?\(?\b(\d{3})\)?[\s.-]?(\d{3})[\s.-]?(\d{4})\b/;
+
+// ---------------------------------------------------------------------------
+// Map positions
+// ---------------------------------------------------------------------------
+const AVE_LAT = [[-41, 53.3955], [-9, 53.4205], [23, 53.4553], [51, 53.4848], [82, 53.5185], [87, 53.5230], [101, 53.5413], [107, 53.5505], [118, 53.5705], [137, 53.5975], [153, 53.6185], [167, 53.6345], [195, 53.6640]];
+const ST_LNG = [[0, -113.3380], [17, -113.3640], [34, -113.3905], [50, -113.4140], [66, -113.4380], [82, -113.4620], [97, -113.4885], [101, -113.4938], [109, -113.5110], [124, -113.5390], [142, -113.5650], [156, -113.5900], [170, -113.6240], [184, -113.6505], [199, -113.6800], [215, -113.7120], [231, -113.7410]];
+const FSA = { T5A: [53.590, -113.410], T5B: [53.570, -113.450], T5C: [53.605, -113.470], T5E: [53.590, -113.500], T5G: [53.565, -113.500], T5H: [53.550, -113.480],
+  T5J: [53.543, -113.490], T5K: [53.540, -113.515], T5L: [53.570, -113.540], T5M: [53.555, -113.555], T5N: [53.540, -113.560], T5P: [53.540, -113.600],
+  T5R: [53.520, -113.590], T5S: [53.545, -113.670], T5T: [53.510, -113.640], T5V: [53.585, -113.590], T5W: [53.580, -113.420], T5X: [53.620, -113.520],
+  T5Y: [53.620, -113.420], T5Z: [53.630, -113.450], T6A: [53.540, -113.420], T6B: [53.520, -113.390], T6C: [53.520, -113.460], T6E: [53.505, -113.480],
+  T6G: [53.520, -113.520], T6H: [53.480, -113.520], T6J: [53.460, -113.520], T6K: [53.460, -113.450], T6L: [53.450, -113.420], T6M: [53.490, -113.660],
+  T6N: [53.440, -113.490], T6P: [53.550, -113.370], T6R: [53.460, -113.580], T6S: [53.500, -113.360], T6T: [53.460, -113.380], T6V: [53.640, -113.560],
+  T6W: [53.420, -113.560], T6X: [53.420, -113.470], T8A: [53.540, -113.300], T8B: [53.530, -113.280], T8C: [53.560, -113.200], T8E: [53.570, -113.150],
+  T8G: [53.520, -113.210], T8H: [53.550, -113.310], T8N: [53.635, -113.620], T8T: [53.650, -113.600], T7X: [53.545, -113.910], T7Y: [53.540, -113.880],
+  T7Z: [53.525, -114.000], T9E: [53.265, -113.550], T4X: [53.357, -113.415], T8L: [53.712, -113.213], T9G: [53.364, -113.732], T8R: [53.802, -113.650],
+  T4V: [53.017, -112.835], T9A: [52.969, -113.377] };
+const REGION = { latMin: 52.6, latMax: 54.6, lngMin: -115.6, lngMax: -112.2 };
+const QUALITY = { exact: ["", ""], grid: ["", ""], estimate: ["approx", "warn"], postal: ["postal area", "bad"], town: ["town only", "bad"], "": ["not on map", "bad"] };
+
+function interp(t, x) {
+  let a = t[0], b = t[1];
+  if (x >= t[t.length - 1][0]) { a = t[t.length - 2]; b = t[t.length - 1]; }
+  else if (x > t[0][0]) for (let i = 0; i < t.length - 1; i++) if (t[i][0] <= x && x <= t[i + 1][0]) { a = t[i]; b = t[i + 1]; break; }
+  return a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0]);
+}
+function avenueLat(ave) { return interp(AVE_LAT, ave); }
+function streetLng(st, east) { return east ? ST_LNG[0][1] + st * 0.0016 : interp(ST_LNG, st); }
+function gridPoint(a) {
+  if (!a || a.numbered === null || !(a.town === "" || a.town === "Edmonton")) return null;
+  const d = a.num.replace(/\D/g, "");
+  if (d.length < 3) return null;
+  const cross = parseInt(d, 10) / 100;
+  const q = a.quad || "NW";
+  let ave, st;
+  if (a.kind === "Ave") { ave = a.numbered; st = cross; } else { st = a.numbered; ave = cross; }
+  if (q === "SW" || q === "SE") ave = -ave;
+  return [avenueLat(ave), streetLng(st, q === "NE" || q === "SE")];
+}
+function locateOffline(addressText) {
+  const a = extractAddress(addressText);
+  const g = gridPoint(a);
+  if (g) return { lat: g[0], lng: g[1], geo: "grid" };
+  const postal = (a && a.postal) || findPostal(addressText);
+  if (postal && FSA[postal.slice(0, 3)]) { const [lat, lng] = FSA[postal.slice(0, 3)]; return { lat, lng, geo: "postal" }; }
+  const town = (a && a.town) || findTown(addressText) || (addressText ? "Edmonton" : "");
+  if (town) { const [lat, lng] = TOWNS[town]; return { lat, lng, geo: "town" }; }
+  return { lat: null, lng: null, geo: "" };
+}
+function km(a, b) {
+  const R = 6371, toR = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * toR, dLng = (b[1] - a[1]) * toR;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * toR) * Math.cos(b[0] * toR) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+// ---------------------------------------------------------------------------
+// Route planning
+// ---------------------------------------------------------------------------
+const ROAD = 1.35, OVERHEAD = 5;
+function buildPlan(jobs, opt) {
+  const depot = [opt.depotLat, opt.depotLng];
+  const d = (a, b) => km(a, b) * ROAD;
+  const pt = j => [j.lat, j.lng];
+  const svc = j => (Number(j.serviceMinutes) || opt.minutesPerJob) + OVERHEAD;
+  const pathKm = pts => { let s = 0; for (let i = 1; i < pts.length; i++) s += d(pts[i - 1], pts[i]); return s; };
+  const minutes = (start, list) => pathKm([start, ...list.map(pt)]) / opt.speed * 60 + list.reduce((s, j) => s + svc(j), 0);
+  const prio = (a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || String(a.receivedAt || "").localeCompare(String(b.receivedAt || "")) || String(a.id).localeCompare(String(b.id));
+  const twoOpt = (start, list) => {
+    if (list.length < 3) return list;
+    let best = list.slice(), bestKm = pathKm([start, ...best.map(pt)]), improved = true;
+    while (improved) {
+      improved = false;
+      for (let i = 0; i < best.length - 1; i++) for (let k = i + 1; k < best.length; k++) {
+        const c = best.slice(0, i).concat(best.slice(i, k + 1).reverse(), best.slice(k + 1));
+        const ck = pathKm([start, ...c.map(pt)]);
+        if (ck + 1e-9 < bestKm) { best = c; bestKm = ck; improved = true; }
+      }
+    }
+    return best;
+  };
+  const placed = jobs.filter(j => j.lat != null && j.lng != null);
+  const unplaced = jobs.filter(j => j.lat == null || j.lng == null);
+  let pool = placed.slice().sort(prio);
+  const dayMin = opt.dayHours * 60;
+  const days = [];
+  let date = new Date(opt.date + "T12:00:00");
+  for (let n = 0; n < opt.days && pool.length; n++) {
+    const day = { date: isoDate(date), routes: [] };
+    for (const crew of opt.crews) {
+      if (!pool.length) break;
+      const seed = opt.mode === "area" ? pool.reduce((m, j) => d(depot, pt(j)) > d(depot, pt(m)) ? j : m, pool[0]) : pool[0];
+      let route = [seed];
+      pool = pool.filter(j => j !== seed);
+      while (pool.length && route.length < opt.maxStops) {
+        let best = null;
+        const pts = [depot, ...route.map(pt)];
+        for (const j of pool) {
+          const p = pt(j);
+          for (let pos = 1; pos <= pts.length; pos++) {
+            const prev = pts[pos - 1];
+            const extra = pos < pts.length ? d(prev, p) + d(p, pts[pos]) - d(prev, pts[pos]) : d(prev, p);
+            if (!best || extra < best[0]) best = [extra, j, pos - 1];
+          }
+        }
+        const trial = route.slice(0, best[2]).concat([best[1]], route.slice(best[2]));
+        if (minutes(depot, trial) > dayMin) break;
+        route = trial;
+        pool = pool.filter(j => j !== best[1]);
+      }
+      route = twoOpt(depot, route);
+      const urgent = route.filter(j => j.urgent);
+      if (urgent.length && urgent.length < route.length) {
+        const u = twoOpt(depot, urgent);
+        route = u.concat(twoOpt(pt(u[u.length - 1]), route.filter(j => !j.urgent)));
+        while (route.length > u.length && minutes(depot, route) > dayMin) pool.push(route.pop());
+        pool.sort(prio);
+      }
+      // times
+      let clock = 0, prev = depot, total = 0;
+      const stops = route.map((j, i) => {
+        const k = d(prev, pt(j)); total += k;
+        clock += k / opt.speed * 60;
+        const arrive = clock; clock += svc(j); prev = pt(j);
+        return { job: j, order: i + 1, arrive: clockText(opt.startTime, arrive), km: k };
+      });
+      day.routes.push({ crew, stops, km: total, minutes: clock, long: clock > dayMin, area: areaOf(route) });
+    }
+    days.push(day);
+    date = new Date(date.getTime() + 86400000);
+  }
+  return { days, unplaced, leftover: pool.length };
+}
+function areaOf(jobs) {
+  const c = {};
+  for (const j of jobs) { const parts = String(j.address || "").split(",").map(s => s.trim()); const t = parts.length >= 3 ? parts[parts.length - 2] : "Edmonton"; c[t] = (c[t] || 0) + 1; }
+  return Object.entries(c).sort((a, b) => b[1] - a[1]).map(e => e[0]).join(", ");
+}
+function clockText(start, mins) {
+  const [h, m] = start.split(":").map(Number);
+  const t = h * 60 + m + Math.round(mins), hh = Math.floor(t / 60) % 24, mm = t % 60;
+  return `${hh % 12 || 12}:${String(mm).padStart(2, "0")} ${hh < 12 ? "AM" : "PM"}`;
+}
+function isoDate(dt) { return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`; }
+function niceDate(iso) { return new Date(iso + "T12:00:00").toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" }); }
+
+// ---------------------------------------------------------------------------
+// Storage: shared db when available, otherwise this browser tab only
+// ---------------------------------------------------------------------------
+const DEFAULTS = { depotAddress: "Edmonton, AB", depotLat: 53.5461, depotLng: -113.4938, crews: ["Crew 1", "Crew 2", "Crew 3"],
+  startTime: "08:00", dayHours: 9, minutesPerJob: 45, maxStops: 10, speed: 40, mode: "priority",
+  inbox: "Kodiak Roofing", ignore: [], lookbackHours: 48, transcripts: false };
+const state = { jobs: [], settings: { ...DEFAULTS }, sync: {}, exports: [], tab: "new", selected: null, plan: null, view: "fit", busy: false };
+let db = null, mcp = null, sample = null, downloads = null;
+const mem = { jobs: new Map(), exports: new Map() };
+
+function newId() { return "j" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+async function putJob(job) {
+  job.updatedAt = new Date().toISOString();
+  if (db) await db.collection("jobs").doc(job.id).set(clean(job));
+  else { mem.jobs.set(job.id, { ...job }); refreshMem(); }
+}
+async function patchJob(id, fields) {
+  fields.updatedAt = new Date().toISOString();
+  if (db) await db.collection("jobs").doc(id).update(clean(fields));
+  else { mem.jobs.set(id, { ...mem.jobs.get(id), ...fields }); refreshMem(); }
+}
+async function removeJob(id) { if (db) await db.collection("jobs").doc(id).delete(); else { mem.jobs.delete(id); refreshMem(); } }
+async function saveDoc(path, data) {
+  if (db) await db.doc(path).set(clean(data));
+  else { if (path === "meta/settings") state.settings = { ...DEFAULTS, ...data }; if (path === "meta/sync") state.sync = data;
+    if (path.startsWith("exports/")) mem.exports.set(path.slice(8), data); refreshMem(); }
+}
+function clean(o) { return JSON.parse(JSON.stringify(o, (k, v) => v === undefined ? null : v)); }
+function refreshMem() { state.jobs = [...mem.jobs.values()]; state.exports = [...mem.exports.values()].sort((a, b) => b.date.localeCompare(a.date)); render(); }
+
+// Serialize writes so two rapid clicks never race on one document.
+let chain = Promise.resolve();
+function queue(fn) { const p = chain.then(fn); chain = p.catch(() => {}); return p; }
+
+// ---------------------------------------------------------------------------
+// Adding jobs
+// ---------------------------------------------------------------------------
+function makeJob(f) {
+  const now = new Date().toISOString();
+  const loc = f.address ? locateOffline(f.address) : { lat: null, lng: null, geo: "" };
+  return { id: newId(), phone: f.phone || "", name: f.name || "", address: f.address || "", addressLocked: !!f.addressLocked,
+    issue: f.issue || "Roof repair", notes: f.notes || "", lastMessage: f.lastMessage || "", urgent: !!f.urgent,
+    source: f.source || "manual", status: f.address ? "new" : "needs_address", lat: loc.lat, lng: loc.lng, geo: loc.geo,
+    receivedAt: f.receivedAt || now, createdAt: now, scheduledDate: "", crew: "", stopOrder: null, acts: f.acts || [], serviceMinutes: null };
+}
+function jobFromText({ address = "", name = "", phone = "", notes = "", urgent = null, text = "", source = "manual" }) {
+  const blob = [address, notes, text].filter(Boolean).join(" ");
+  const parsed = extractAddress(address) || extractAddress(text);
+  const clean = parsed ? parsed.text : address.trim();
+  const c = classify(blob);
+  if (!phone) { const m = PHONE_IN_TEXT.exec(text || ""); phone = m ? m.slice(1).join("") : ""; }
+  return makeJob({ address: clean, addressLocked: !!address, name: name || findName(text), phone: normPhone(phone),
+    notes: notes || (text && text !== address ? text : ""), issue: c.issue, urgent: urgent === null ? c.urgent : !!urgent, source });
+}
+
+// ---------------------------------------------------------------------------
+// Claude estimates locations the street grid can't (named crescents, closes...)
+// ---------------------------------------------------------------------------
+async function estimateLocations(jobs) {
+  if (!sample || !jobs.length) return 0;
+  let fixed = 0;
+  for (let i = 0; i < jobs.length; i += 20) {
+    const batch = jobs.slice(i, i + 20);
+    const list = batch.map((j, n) => `${n}: ${j.address}`).join("\n");
+    let ans;
+    try {
+      ans = await sample.json(
+        "You place residential street addresses in the Edmonton, Alberta region on a map for a roofing crew dispatcher.\n" +
+        "For each numbered address, give your best latitude and longitude from what you know about the neighbourhood or subdivision " +
+        "(Edmonton suburb street names usually start with the neighbourhood name, e.g. 'Haddow Close' is in Haddow). " +
+        "If you only know the town, give the town centre and confidence \"low\".\n" +
+        'Answer with only a JSON array: [{"i":0,"lat":53.5,"lng":-113.5,"area":"neighbourhood","confidence":"high|medium|low"}]\n\n' + list,
+        { modelTier: "quick" });
+    } catch (e) {
+      if (e && (e.code === "not_granted" || e.code === "rate_limited")) break;
+      continue;
+    }
+    if (!Array.isArray(ans)) continue;
+    for (const r of ans) {
+      const j = batch[r && r.i];
+      if (!j || typeof r.lat !== "number" || typeof r.lng !== "number") continue;
+      if (r.lat < REGION.latMin || r.lat > REGION.latMax || r.lng < REGION.lngMin || r.lng > REGION.lngMax) continue;
+      if (r.confidence === "low") continue;
+      await queue(() => patchJob(j.id, { lat: r.lat, lng: r.lng, geo: "estimate", area: String(r.area || "").slice(0, 60) }));
+      fixed++;
+    }
+  }
+  return fixed;
+}
+function needsEstimate(j) { return j.address && (j.geo === "town" || j.geo === "postal" || j.geo === "") && ["new", "needs_address", "scheduled"].includes(j.status); }
+
+// ---------------------------------------------------------------------------
+// Quo sync (reads only)
+// ---------------------------------------------------------------------------
+function toolText(res) {
+  if (!res) return "";
+  if (typeof res.payload === "string") return res.payload;
+  const blocks = (res.content || []).filter(b => b.type === "text").map(b => b.text);
+  if (blocks.length) return blocks.join("\n");
+  return typeof res.payload === "object" ? JSON.stringify(res.payload) : "";
+}
+async function quo(tool, input) { return toolText(await mcp.callTool("Quo", tool, input, { cache: false })); }
+
+function parseInboxes(text) {
+  const rows = [];
+  for (const line of text.split("\n")) {
+    const p = line.split("|").map(s => s.trim());
+    if (p.length >= 3 && /^PN\w+$/.test(p[0])) rows.push({ id: p[0], number: p[1], name: p[2] });
+  }
+  return rows;
+}
+// fetch-messages whole-inbox output: a header per conversation, then "  AC.. | direction | time | text" rows.
+function parseMessages(text) {
+  const convs = new Map();
+  let cur = null, last = null;
+  for (const raw of text.split("\n")) {
+    const head = /^(\+\d{10,15})\s+\(conversation\s+(CN\w+)\)/.exec(raw);
+    if (head) { cur = { phone: head[1], conv: head[2], msgs: [] }; convs.set(head[1], cur); last = null; continue; }
+    if (/^Group:/.test(raw)) { cur = null; last = null; continue; }
+    if (!cur) continue;
+    const row = /^\s+(AC\w+)\s*\|\s*(incoming|outgoing)\s*\|\s*(\S+)\s*\|\s?(.*)$/.exec(raw);
+    if (row) { last = { id: row[1], dir: row[2], at: row[3], text: row[4] === "(no text)" ? "" : row[4] }; cur.msgs.push(last); continue; }
+    if (/^\s+(media:|\[)/.test(raw) || raw.trim() === "") { if (raw.trim() === "") last = last; continue; }
+    if (last) last.text += "\n" + raw;
+  }
+  const next = /\[next_conversations:\s*([^\]\s]+)\s*\]/.exec(text);
+  return { convs, next: next ? next[1] : null };
+}
+// fetch-missed-calls / fetch-call-transcripts: rows start with an AC.. id; everything until the next row belongs to that call.
+function parseCallBlocks(text, inboxNumber) {
+  const calls = [];
+  let cur = null;
+  for (const raw of text.split("\n")) {
+    const row = /^\s*(AC\w+)\s*\|(.*)$/.exec(raw);
+    if (row) {
+      const cols = row[2].split("|").map(s => s.trim());
+      const phones = (row[2].match(/\+\d{10,15}/g) || []).filter(p => p !== inboxNumber);
+      const at = cols.find(c => /^\d{4}-\d\d-\d\dT/.test(c)) || "";
+      cur = { id: row[1], phone: phones[0] || "", at, text: "" };
+      calls.push(cur);
+      continue;
+    }
+    if (cur) cur.text += raw.replace(/^\s*(transcript|summary)\s*:\s*/i, "") + "\n";
+  }
+  for (const c of calls) c.text = c.text.replace(/^\s*(status|duration|recordingUrl|voicemail)\s*:.*$/gim, "").replace(/\(no voicemail\)/gi, "").trim();
+  const next = /(?:next_conversations|conversationPageToken)[:=]?\s*"?([A-Za-z0-9_\-=]{8,})/.exec(text);
+  return { calls, next: next ? next[1] : null };
+}
+
+async function runSync() {
+  if (!mcp) { flash("addMsg", "Quo isn't available in this view. Open the page on claude.ai with the Quo connector added.", "err"); return; }
+  const s = state.settings;
+  const btn = $("syncBtn"); btn.disabled = true;
+  const say = t => { btn.textContent = t; };
+  try {
+    say("Finding inbox…");
+    const inboxes = parseInboxes(await quo("list-inboxes", {}));
+    const want = String(s.inbox || "").trim().toLowerCase();
+    const inbox = inboxes.find(b => [b.id, b.number, b.name].map(x => x.toLowerCase()).includes(want))
+      || inboxes.find(b => want && b.name.toLowerCase().includes(want)) || (inboxes.length === 1 ? inboxes[0] : null);
+    if (!inbox) throw { code: "inbox", message: `Couldn't find the Quo inbox "${s.inbox}". Available: ${inboxes.map(b => b.name).join(", ") || "none"}. Change it in Settings.` };
+    const started = new Date();
+    const lastIso = state.sync[inbox.id];
+    const since = lastIso ? new Date(new Date(lastIso).getTime() - 10 * 60000) : new Date(started.getTime() - (Number(s.lookbackHours) || 48) * 3600000);
+    const createdAfter = since.toISOString().replace(/\.\d+Z$/, "Z");
+    const ignore = new Set([normPhone(inbox.number), ...(s.ignore || []).map(normPhone)].filter(Boolean));
+
+    const people = new Map();
+    const person = p => { if (!people.has(p)) people.set(p, { incoming: [], outgoing: [], calls: [], ids: [], first: null }); return people.get(p); };
+    const seenAt = (rec, at) => { if (at && (!rec.first || at < rec.first)) rec.first = at; };
+
+    say("Reading texts…");
+    let token = null, pages = 0;
+    do {
+      const input = { inboxPhoneNumber: inbox.id, createdAfter };
+      if (token) input.conversationPageToken = token;
+      const { convs, next } = parseMessages(await quo("fetch-messages", input));
+      for (const c of convs.values()) {
+        const rec = person(c.phone);
+        for (const m of c.msgs) { rec.ids.push(m.id); seenAt(rec, m.at); if (m.text) (m.dir === "incoming" ? rec.incoming : rec.outgoing).push(m.text); }
+      }
+      token = next; pages++;
+    } while (token && pages < 10);
+
+    say("Reading voicemails…");
+    token = null; pages = 0;
+    do {
+      const input = { inboxPhoneNumber: inbox.id, createdAfter };
+      if (token) input.conversationPageToken = token;
+      const { calls, next } = parseCallBlocks(await quo("fetch-missed-calls", input), inbox.number);
+      for (const c of calls) if (c.phone) { const rec = person(c.phone); rec.ids.push(c.id); seenAt(rec, c.at); rec.calls.push(c.text || "Missed call, no voicemail"); }
+      token = next; pages++;
+    } while (token && pages < 5);
+
+    if (s.transcripts) {
+      say("Reading call transcripts…");
+      try {
+        const { calls } = parseCallBlocks(await quo("fetch-call-transcripts", { inboxPhoneNumber: inbox.id, createdAfter }), inbox.number);
+        for (const c of calls) if (c.phone && c.text) { const rec = person(c.phone); rec.ids.push(c.id); seenAt(rec, c.at); rec.calls.push(c.text); }
+      } catch (e) { /* transcripts need Quo Business; skip quietly */ }
+    }
+
+    say("Updating jobs…");
+    let created = 0, updated = 0;
+    for (const [phoneRaw, rec] of people) {
+      const phone = normPhone(phoneRaw) || phoneRaw;
+      if (ignore.has(phone)) continue;
+      const open = state.jobs.filter(j => j.phone === phone && ["new", "needs_address", "scheduled"].includes(j.status)).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+      const known = new Set(open ? open.acts || [] : []);
+      const fresh = rec.ids.filter(id => !known.has(id));
+      if (!fresh.length) continue;
+      const texts = rec.incoming.slice().reverse().concat(rec.calls, rec.outgoing.slice().reverse());
+      const blob = texts.join("\n");
+      let parsed = null;
+      for (const t of texts) { parsed = extractAddress(t); if (parsed) break; }
+      const c = classify(blob);
+      const name = findName(blob);
+      const lastMsg = (rec.incoming[0] || rec.calls[0] || rec.outgoing[0] || "").slice(0, 400);
+      if (!open) {
+        const recentDone = state.jobs.find(j => j.phone === phone && ["done", "cancelled"].includes(j.status) && (Date.now() - new Date(j.updatedAt || 0)) < 3 * 86400000);
+        if (recentDone) continue;
+        const job = makeJob({ phone, name, address: parsed ? parsed.text : "", issue: c.issue, urgent: c.urgent, source: "quo",
+          receivedAt: rec.first || new Date().toISOString(), lastMessage: lastMsg, acts: fresh.slice(-60) });
+        await queue(() => putJob(job)); created++;
+      } else {
+        const f = { acts: [...(open.acts || []), ...fresh].slice(-60), lastMessage: lastMsg || open.lastMessage };
+        if (name && !open.name) f.name = name;
+        if (c.urgent && !open.urgent) f.urgent = true;
+        if (c.issue !== "Roof repair" && (!open.issue || open.issue === "Roof repair")) f.issue = c.issue;
+        if (parsed && !open.addressLocked && parsed.text !== open.address) {
+          Object.assign(f, { address: parsed.text }, locateOffline(parsed.text));
+          if (open.status === "needs_address") f.status = "new";
+        }
+        await queue(() => patchJob(open.id, f)); updated++;
+      }
+    }
+    await queue(() => saveDoc("meta/sync", { ...state.sync, [inbox.id]: started.toISOString() }));
+    say("Placing on map…");
+    await new Promise(r => setTimeout(r, 400));
+    await estimateLocations(state.jobs.filter(needsEstimate));
+    const waiting = state.jobs.filter(j => j.status === "needs_address").length;
+    flash("addMsg", `Quo sync done (${inbox.name}): ${created} new, ${updated} updated. ${waiting} still need an address.`, "ok");
+  } catch (e) {
+    flash("addMsg", syncError(e), "err");
+  } finally {
+    btn.disabled = false; btn.textContent = "Sync from Quo";
+  }
+}
+function syncError(e) {
+  switch (e && e.code) {
+    case "needs_reauth": return "Quo needs to be reconnected: claude.ai Settings → Connectors → Quo.";
+    case "server_not_connected": return "Add the Quo connector in claude.ai Settings → Connectors, then try again.";
+    case "selection_required": return "You have more than one Quo connector. Pick one in the prompt claude.ai shows, then sync again.";
+    case "not_in_manifest": case "approval_required": case "consent_required": return "This page needs your OK to read Quo. Click Sync again and choose Allow.";
+    case "blocked_by_policy": return "Your organization's settings block this page from reading Quo.";
+    case "server_unavailable": case "upstream_error": return "Quo didn't answer. Wait a minute and sync again.";
+    case "tool_error": return "Quo returned an error: " + (e.message || "unknown");
+    default: return (e && e.message) || "Sync failed.";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Export files
+// ---------------------------------------------------------------------------
+function mapsSearch(a) { return "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(a); }
+function routeLinks(origin, addrs) {
+  const out = [];
+  for (let i = 0; i < addrs.length; i += 9) {
+    const part = addrs.slice(i, i + 9);
+    const q = new URLSearchParams({ api: "1", origin, destination: part[part.length - 1], travelmode: "driving" });
+    if (part.length > 1) q.set("waypoints", part.slice(0, -1).join("|"));
+    out.push("https://www.google.com/maps/dir/?" + q.toString());
+    origin = part[part.length - 1];
+  }
+  return out;
+}
+function prettyPhone(p) { return /^\+1\d{10}$/.test(p || "") ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : (p || ""); }
+function exportRecord(day) {
+  return { date: day.date, createdAt: new Date().toISOString(), depot: state.settings.depotAddress,
+    routes: day.routes.map(r => ({ crew: r.crew, km: Math.round(r.km), hours: +(r.minutes / 60).toFixed(1), area: r.area,
+      stops: r.stops.map(s => ({ id: s.job.id, order: s.order, arrive: s.arrive, address: s.job.address, name: s.job.name || "",
+        phone: s.job.phone || "", issue: s.job.issue || "", urgent: !!s.job.urgent, notes: (s.job.notes || s.job.lastMessage || "").slice(0, 300) })) })) };
+}
+function csvFor(ex) {
+  const q = v => `"${String(v ?? "").replace(/"/g, '""').replace(/\n/g, " ")}"`;
+  const rows = [["Date", "Crew", "Stop", "Arrive", "Customer", "Phone", "Address", "Job", "Urgent", "Notes", "Map"]];
+  for (const r of ex.routes) for (const s of r.stops) rows.push([ex.date, r.crew, s.order, s.arrive, s.name, prettyPhone(s.phone), s.address, s.issue, s.urgent ? "YES" : "", s.notes, mapsSearch(s.address)]);
+  return "﻿" + rows.map(r => r.map(q).join(",")).join("\r\n");
+}
+function sheetFor(ex) {
+  const e = escapeHtml;
+  const pages = ex.routes.map(r => {
+    const links = routeLinks(ex.depot, r.stops.map(s => s.address));
+    return `<section><h1>${e(r.crew)} · ${e(niceDate(ex.date))}</h1>
+      <p>${r.stops.length} stops · ${e(r.area)} · ~${r.km} km driving · ~${r.hours} h · ${links.map((u, i) => `<a href="${e(u)}">Route${links.length > 1 ? " part " + (i + 1) : ""}</a>`).join(" ")}</p>
+      <table><thead><tr><th>#</th><th>ETA</th><th>Address</th><th>Customer</th><th>Job / notes</th><th>Done</th></tr></thead><tbody>
+      ${r.stops.map(s => `<tr><td>${s.order}</td><td>${e(s.arrive)}</td><td><b>${e(s.address)}</b>${s.urgent ? ' <span class="u">URGENT</span>' : ""}<br><a href="${e(mapsSearch(s.address))}">map</a></td>
+        <td>${e(s.name)}<br>${e(prettyPhone(s.phone))}</td><td>${e(s.issue)}<div class="n">${e(s.notes)}</div></td><td class="b">&#9744;</td></tr>`).join("")}
+      </tbody></table></section>`;
+  }).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Crew sheets ${e(ex.date)}</title>
+<style>body{font:14px/1.35 Arial,sans-serif;margin:16px;color:#111;background:#fff}section{page-break-after:always;margin-bottom:28px}section:last-child{page-break-after:auto}
+h1{font-size:20px;margin:0 0 4px}p{margin:0 0 10px;color:#444}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:6px 8px;text-align:left;vertical-align:top}
+th{background:#eee}td.b{text-align:center;font-size:22px;width:44px}.n{color:#555;font-size:12px;margin-top:3px}.u{background:#c00;color:#fff;font-size:11px;padding:1px 5px;border-radius:3px}a{color:#0645ad}</style>
+</head><body>${pages}</body></html>`;
+}
+function smsFor(ex, r) {
+  const links = routeLinks(ex.depot, r.stops.map(s => s.address));
+  return `${r.crew} — ${niceDate(ex.date)} (${r.stops.length} stops)\n` +
+    r.stops.map(s => `${s.order}. ${s.arrive} ${s.address}${s.urgent ? " (URGENT - leak)" : ""}${s.name ? " - " + s.name : ""}${s.phone ? " " + prettyPhone(s.phone) : ""}${s.issue ? " - " + s.issue : ""}`).join("\n") +
+    `\nRoute: ${links.join("\n")}`;
+}
+async function save(filename, data) {
+  if (!downloads) { flash("planMsg", "Downloads aren't available in this view.", "err"); return; }
+  try { const r = await downloads.save({ filename, data }); if (r.status === "saved") flash("planMsg", `Saved ${filename}.`, "ok"); }
+  catch (e) { if (e && e.code !== "declined") flash("planMsg", "Couldn't save the file: " + (e.message || e.code), "err"); }
+}
+async function copy(text, okMsg) {
+  try { await navigator.clipboard.writeText(text); flash("planMsg", okMsg, "ok"); }
+  catch (e) {
+    const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand("copy"); } catch (_) {}
+    ta.remove(); flash("planMsg", ok ? okMsg : "Copy didn't work here. Open the crew sheet and copy from it.", ok ? "ok" : "err");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+const $ = id => document.getElementById(id);
+function escapeHtml(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+const CREW_COLORS = ["#2b6cb0", "#c8541b", "#2f855a", "#805ad5", "#b7791f", "#0f7c86", "#b83280", "#4a5568"];
+let flashTimer = null;
+function flash(id, text, kind) { const el = $(id); el.innerHTML = `<div class="msg ${kind}">${escapeHtml(text)}</div>`; }
+
+function settingsToPlanForm() {
+  const s = state.settings;
+  if (document.activeElement && document.activeElement.closest && document.activeElement.closest(".panel") && ["pCrews", "pStops", "pMins", "pHours", "pMode"].includes(document.activeElement.id)) return;
+  $("pCrews").value = (s.crews || []).join(", ");
+  $("pStops").value = s.maxStops; $("pMins").value = s.minutesPerJob; $("pHours").value = s.dayHours; $("pMode").value = s.mode;
+}
+function planOptions() {
+  const s = state.settings;
+  const crews = $("pCrews").value.split(",").map(x => x.trim()).filter(Boolean);
+  return { date: $("pDate").value || isoDate(new Date(Date.now() + 86400000)), days: 5, crews: crews.length ? crews : ["Crew 1"],
+    maxStops: Math.max(1, +$("pStops").value || s.maxStops), minutesPerJob: Math.max(5, +$("pMins").value || s.minutesPerJob),
+    dayHours: Math.max(1, +$("pHours").value || s.dayHours), mode: $("pMode").value || "priority", speed: Number(s.speed) || 40,
+    startTime: s.startTime || "08:00", depotLat: s.depotLat, depotLng: s.depotLng };
+}
+
+function render() {
+  const jobs = state.jobs;
+  const count = st => jobs.filter(j => j.status === st).length;
+  $("tallies").innerHTML = [["Waiting", count("new")], ["Need address", count("needs_address")], ["Scheduled", count("scheduled")], ["Done", count("done")]]
+    .map(([l, n]) => `<span class="tally">${l} <b>${n}</b></span>`).join("");
+  const tabs = [["new", "Waiting"], ["needs_address", "Need address"], ["scheduled", "Scheduled"], ["done", "Done"], ["cancelled", "Cancelled"]];
+  $("tabs").innerHTML = tabs.map(([k, l]) => `<button type="button" data-tab="${k}" aria-pressed="${state.tab === k}">${l}<span class="n">${count(k)}</span></button>`).join("");
+  renderJobs();
+  state.plan = buildPlan(jobs.filter(j => j.status === "new"), planOptions());
+  renderPlan();
+  renderMap();
+  renderExports();
+}
+
+function renderJobs() {
+  const list = state.jobs.filter(j => j.status === state.tab).sort((a, b) =>
+    (state.tab === "scheduled" ? String(a.scheduledDate + a.crew + String(a.stopOrder).padStart(3, "0")).localeCompare(b.scheduledDate + b.crew + String(b.stopOrder).padStart(3, "0")) : 0)
+    || (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0) || String(a.receivedAt).localeCompare(String(b.receivedAt)));
+  if (!state.jobs.length) {
+    $("jobs").innerHTML = `<div class="empty"><b>No jobs yet.</b><br>Press <b>Sync from Quo</b> to pull in new calls and texts, or type an address above. To try it first, open Settings → Example data.</div>`;
+    return;
+  }
+  if (!list.length) { $("jobs").innerHTML = `<div class="empty">Nothing here right now.</div>`; return; }
+  $("jobs").innerHTML = list.map(j => {
+    const [qt, qc] = QUALITY[j.geo || ""] || ["", ""];
+    const when = j.receivedAt ? new Date(j.receivedAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+    const acts = [];
+    if (j.status !== "done") acts.push(`<button class="small" data-act="done" data-id="${j.id}">Done</button>`);
+    if (["scheduled", "done", "cancelled"].includes(j.status)) acts.push(`<button class="small" data-act="back" data-id="${j.id}">Back to waiting</button>`);
+    if (j.status !== "cancelled") acts.push(`<button class="small" data-act="cancelled" data-id="${j.id}">Cancel</button>`);
+    acts.push(`<button class="small" data-act="urgent" data-id="${j.id}">${j.urgent ? "Not urgent" : "Urgent"}</button>`);
+    acts.push(`<button class="small" data-act="delete" data-id="${j.id}">Delete</button>`);
+    const confirm = state.confirmDelete === j.id ? `<div class="confirm">Delete this job for good? <button class="small" data-act="delete-yes" data-id="${j.id}">Delete</button><button class="small" data-act="delete-no" data-id="${j.id}">Keep</button></div>` : "";
+    const editing = state.editing === j.id;
+    return `<div class="job${j.urgent ? " urgent" : ""}${state.selected === j.id ? " sel" : ""}" id="job-${j.id}">
+      <div class="stripe"></div><div>
+      ${editing ? `<form class="edit" data-edit-form="${j.id}"><input id="edit-${j.id}" value="${escapeHtml(j.address)}" placeholder="Street address"><button class="small primary" type="submit">Save</button><button class="small" type="button" data-act="edit-cancel">Cancel</button></form>`
+        : `<div class="addr" data-edit="${j.id}" title="Click to edit the address">${j.address ? escapeHtml(j.address) : "<i>No address yet. Click to add it</i>"}${j.urgent ? '<span class="chip urgent">URGENT</span>' : ""}${qt && j.address ? `<span class="chip ${qc}">${qt}</span>` : ""}${j.source === "example" ? '<span class="chip ex">example</span>' : ""}</div>`}
+      <div class="meta">${[escapeHtml(j.name), j.phone ? `<span class="num">${escapeHtml(prettyPhone(j.phone))}</span>` : "", escapeHtml(j.issue), escapeHtml(when),
+        j.scheduledDate ? `${escapeHtml(j.crew)} · ${escapeHtml(j.scheduledDate)} #${j.stopOrder}` : "", j.source === "quo" ? "from Quo" : ""].filter(Boolean).join(" · ")}</div>
+      ${j.lastMessage || j.notes ? `<div class="quote">“${escapeHtml(j.lastMessage || j.notes)}”</div>` : ""}
+      <div class="acts">${acts.join("")}</div>${confirm}</div></div>`;
+  }).join("");
+  if (state.editing) { const el = $("edit-" + state.editing); if (el && document.activeElement !== el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }
+}
+
+function renderPlan() {
+  const p = state.plan;
+  const waiting = state.jobs.filter(j => j.status === "new").length;
+  if (!waiting) { $("plan").innerHTML = `<div class="empty">No waiting jobs. Routes appear here as soon as jobs come in.</div>`; return; }
+  const day = p.days[0];
+  let h = "";
+  if (day) {
+    h += `<div class="dayhead">${escapeHtml(niceDate(day.date))}</div><div class="routes">` + day.routes.map((r, i) => `
+      <div class="route" style="--c:${CREW_COLORS[i % CREW_COLORS.length]}">
+        <h3><span>${escapeHtml(r.crew)}</span><span class="num">${r.stops.length} stops</span></h3>
+        <div class="stats">${escapeHtml(r.area)} · ~${Math.round(r.km)} km · ~${(r.minutes / 60).toFixed(1)} h${r.long ? ' <span class="chip bad">long day</span>' : ""}</div>
+        <ol>${r.stops.map(s => `<li><span class="t">${escapeHtml(s.arrive)}</span> ${escapeHtml(s.job.address)}${s.job.urgent ? ' <span class="chip urgent">!</span>' : ""}</li>`).join("")}</ol>
+      </div>`).join("") + `</div>`;
+  }
+  const perDay = day ? day.routes.reduce((s, r) => s + r.stops.length, 0) : 0;
+  const daysOut = p.days.length + (p.leftover > 0 && perDay ? Math.ceil(p.leftover / perDay) : 0);
+  h += `<p class="ahead">${waiting} waiting job${waiting === 1 ? "" : "s"}. With ${planOptions().crews.length} crew${planOptions().crews.length === 1 ? "" : "s"} that's about <b>${daysOut} working day${daysOut === 1 ? "" : "s"}</b> of work.`;
+  if (p.unplaced.length) h += ` <span class="chip bad">${p.unplaced.length} not on the map</span> Fix their addresses so they can be routed.`;
+  h += `</p>`;
+  $("plan").innerHTML = h;
+}
+
+// Map: a drawn street grid (major avenues and streets), towns, and job pins.
+const MAJOR_AVES = [[23, "23 Ave"], [51, "51 Ave"], [82, "Whyte (82 Ave)"], [101, "Jasper Ave"], [118, "118 Ave"], [137, "137 Ave"], [153, "153 Ave"], [167, "167 Ave"]];
+const MAJOR_STS = [[17, "17 St"], [34, "34 St"], [50, "50 St"], [75, "75 St"], [97, "97 St"], [111, "111 St"], [127, "127 St"], [149, "149 St"], [170, "170 St"], [184, "184 St"], [199, "199 St"], [215, "215 St"]];
+function renderMap() {
+  const svg = $("map");
+  const W = svg.clientWidth || 700, H = svg.clientHeight || 440;
+  const s = state.settings;
+  const day = state.plan && state.plan.days[0];
+  const routeOf = new Map();
+  if (day) day.routes.forEach((r, i) => r.stops.forEach(st => routeOf.set(st.job.id, { color: CREW_COLORS[i % CREW_COLORS.length], order: st.order })));
+  const shown = state.jobs.filter(j => j.lat != null && (j.status === "new" || (state.tab !== "new" && j.status === state.tab)));
+  let pts = shown.map(j => [j.lat, j.lng]).concat([[s.depotLat, s.depotLng]]);
+  if (state.view === "metro" || pts.length < 2) pts = [[53.40, -113.75], [53.68, -113.25]];
+  let latMin = Math.min(...pts.map(p => p[0])), latMax = Math.max(...pts.map(p => p[0]));
+  let lngMin = Math.min(...pts.map(p => p[1])), lngMax = Math.max(...pts.map(p => p[1]));
+  const kx = Math.cos(53.5 * Math.PI / 180);
+  let spanX = Math.max((lngMax - lngMin) * kx, 0.03), spanY = Math.max(latMax - latMin, 0.03);
+  const cx = (lngMin + lngMax) / 2, cy = (latMin + latMax) / 2;
+  const scale = Math.min((W - 60) / spanX, (H - 60) / spanY);
+  const X = lng => W / 2 + (lng - cx) * kx * scale, Y = lat => H / 2 - (lat - cy) * scale;
+  let g = "";
+  const stEnds = [streetLng(0), streetLng(231)], aveEnds = [avenueLat(-41), avenueLat(195)];
+  for (let a = -40; a <= 190; a += 10) g += `<line x1="${X(stEnds[0])}" x2="${X(stEnds[1])}" y1="${Y(avenueLat(a))}" y2="${Y(avenueLat(a))}" stroke="var(--map-road)" stroke-width="0.6"/>`;
+  for (let st = 10; st <= 230; st += 10) g += `<line y1="${Y(aveEnds[0])}" y2="${Y(aveEnds[1])}" x1="${X(streetLng(st))}" x2="${X(streetLng(st))}" stroke="var(--map-road)" stroke-width="0.6"/>`;
+  for (const [a, label] of MAJOR_AVES) { const y = Y(avenueLat(a)); g += `<line x1="${X(stEnds[0])}" x2="${X(stEnds[1])}" y1="${y}" y2="${y}" stroke="var(--map-road-major)" stroke-width="1.6"/>`;
+    if (y > 10 && y < H - 4) g += `<text x="6" y="${y - 3}" font-size="10" fill="var(--map-label)">${label}</text>`; }
+  let lastLabelX = -Infinity;
+  for (const [st, label] of MAJOR_STS.slice().reverse()) { const x = X(streetLng(st)); g += `<line y1="${Y(aveEnds[0])}" y2="${Y(aveEnds[1])}" x1="${x}" x2="${x}" stroke="var(--map-road-major)" stroke-width="1.6"/>`;
+    if (x > 4 && x < W - 30 && x - lastLabelX > 46) { g += `<text x="${x + 3}" y="${H - 6}" font-size="10" fill="var(--map-label)">${label}</text>`; lastLabelX = x; } }
+  for (const [name, [lat, lng]] of Object.entries(TOWNS)) {
+    const x = X(lng), y = Y(lat);
+    if (x < 0 || x > W || y < 0 || y > H) continue;
+    if (name === "Edmonton") { g += `<text x="${x}" y="${y - 10}" font-size="12" font-weight="700" fill="var(--map-label)" text-anchor="middle" opacity=".6">EDMONTON</text>`; continue; }
+    g += `<circle cx="${x}" cy="${y}" r="3" fill="var(--map-label)"/><text x="${x + 6}" y="${y + 4}" font-size="11" fill="var(--map-label)">${name}</text>`;
+  }
+  if (day) day.routes.forEach((r, i) => {
+    const line = [[s.depotLat, s.depotLng], ...r.stops.map(st => [st.job.lat, st.job.lng])].map(p => `${X(p[1]).toFixed(1)},${Y(p[0]).toFixed(1)}`).join(" ");
+    g += `<polyline points="${line}" fill="none" stroke="${CREW_COLORS[i % CREW_COLORS.length]}" stroke-width="2" stroke-dasharray="5 4" opacity=".75"/>`;
+  });
+  g += `<g transform="translate(${X(s.depotLng)},${Y(s.depotLat)})"><rect x="-7" y="-7" width="14" height="14" rx="2" fill="var(--ink)"/><text y="4" font-size="10" fill="var(--panel)" text-anchor="middle">S</text></g>`;
+  for (const j of shown) {
+    const r = routeOf.get(j.id);
+    const color = r ? r.color : (j.urgent ? "var(--urgent)" : "var(--muted)");
+    const sel = state.selected === j.id;
+    g += `<g class="pin" data-pin="${j.id}" transform="translate(${X(j.lng).toFixed(1)},${Y(j.lat).toFixed(1)})" style="cursor:pointer">
+      <circle r="${sel ? 12 : 9}" fill="${color}" stroke="var(--panel)" stroke-width="2"/>
+      <text y="3.5" font-size="10" font-weight="700" fill="#fff" text-anchor="middle" font-family="IBM Plex Mono, monospace">${r ? r.order : (j.urgent ? "!" : "")}</text>
+      <title>${escapeHtml(j.address)}${j.name ? " — " + escapeHtml(j.name) : ""}</title></g>`;
+  }
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = g;
+  $("legend").innerHTML = (day ? day.routes.map((r, i) => `<span><i style="background:${CREW_COLORS[i % CREW_COLORS.length]}"></i>${escapeHtml(r.crew)}</span>`).join("") : "") +
+    `<span><i style="background:var(--ink);border-radius:2px"></i>Shop</span><span>Pins marked "approx" or "town only" in the list may be off. Fix the address to move them.</span>`;
+}
+
+function renderExports() {
+  if (!state.exports.length) { $("exports").innerHTML = `<div class="empty">Nothing exported yet. When the day's routes look right, press <b>Export this day</b>.</div>`; return; }
+  $("exports").innerHTML = state.exports.slice(0, 20).map(ex => `
+    <div class="ex"><div class="grow"><b>${escapeHtml(niceDate(ex.date))}</b><div class="sub">${ex.routes.map(r => `${escapeHtml(r.crew)}: ${r.stops.length}`).join(" · ")}</div></div>
+      <button class="small" data-ex="sheet" data-date="${ex.date}">Crew sheets</button>
+      <button class="small" data-ex="csv" data-date="${ex.date}">Spreadsheet</button>
+      ${ex.routes.map((r, i) => `<button class="small" data-ex="sms" data-date="${ex.date}" data-i="${i}">Copy ${escapeHtml(r.crew)}</button>`).join("")}
+    </div>`).join("");
+}
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+$("addForm").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const address = $("fAddress").value.trim();
+  if (!address && !$("fNotes").value.trim()) { flash("addMsg", "Type an address first.", "err"); return; }
+  const job = jobFromText({ address, name: $("fName").value.trim(), phone: $("fPhone").value.trim(), notes: $("fNotes").value.trim(), urgent: $("fUrgent").checked ? true : null });
+  try {
+    await queue(() => putJob(job));
+    ["fAddress", "fName", "fPhone", "fNotes"].forEach(id => $(id).value = ""); $("fUrgent").checked = false; $("fAddress").focus();
+    const [qt] = QUALITY[job.geo] || [""];
+    flash("addMsg", `Added ${job.address || "job"}${qt ? `. Map position: ${qt}${sample ? ", asking Claude to place it" : ""}.` : "."}`, "ok");
+    if (needsEstimate(job)) estimateLocations([job]);
+  } catch (e) { flash("addMsg", "Couldn't save: " + (e.message || e.code), "err"); }
+});
+$("bulkBtn").addEventListener("click", async () => {
+  const lines = $("bulk").value.split("\n").map(l => l.replace(/^[\s\-•*]+/, "").trim()).filter(Boolean);
+  if (!lines.length) return;
+  const jobs = lines.map(l => jobFromText({ text: l, address: extractAddress(l) ? l : "" }));
+  for (const j of jobs) await queue(() => putJob(j));
+  $("bulk").value = "";
+  flash("addMsg", `Added ${jobs.length} jobs.`, "ok");
+  estimateLocations(jobs.filter(needsEstimate));
+});
+$("tabs").addEventListener("click", ev => { const b = ev.target.closest("button[data-tab]"); if (!b) return; state.tab = b.dataset.tab; state.editing = null; render(); });
+$("jobs").addEventListener("click", async ev => {
+  const ed = ev.target.closest("[data-edit]");
+  if (ed) { state.editing = ed.dataset.edit; state.selected = ed.dataset.edit; renderJobs(); renderMap(); return; }
+  const b = ev.target.closest("button[data-act]");
+  if (!b) return;
+  const id = b.dataset.id, act = b.dataset.act, j = state.jobs.find(x => x.id === id);
+  if (act === "edit-cancel") { state.editing = null; renderJobs(); return; }
+  if (act === "delete") { state.confirmDelete = id; renderJobs(); return; }
+  if (act === "delete-no") { state.confirmDelete = null; renderJobs(); return; }
+  if (!j) return;
+  if (act === "delete-yes") { state.confirmDelete = null; await queue(() => removeJob(id)); return; }
+  if (act === "urgent") await queue(() => patchJob(id, { urgent: !j.urgent }));
+  else if (act === "back") await queue(() => patchJob(id, { status: j.address ? "new" : "needs_address", scheduledDate: "", crew: "", stopOrder: null }));
+  else await queue(() => patchJob(id, { status: act }));
+});
+$("jobs").addEventListener("submit", async ev => {
+  const f = ev.target.closest("[data-edit-form]");
+  if (!f) return;
+  ev.preventDefault();
+  const id = f.dataset.editForm, raw = $("edit-" + id).value.trim();
+  state.editing = null;
+  if (!raw) { renderJobs(); return; }
+  const parsed = extractAddress(raw);
+  const address = parsed ? parsed.text : raw;
+  const j = state.jobs.find(x => x.id === id);
+  const fields = { address, addressLocked: true, ...locateOffline(address) };
+  if (j && j.status === "needs_address") fields.status = "new";
+  await queue(() => patchJob(id, fields));
+  if (needsEstimate({ ...j, ...fields })) estimateLocations([{ ...j, ...fields }]);
+});
+$("map").addEventListener("click", ev => {
+  const p = ev.target.closest("[data-pin]");
+  if (!p) return;
+  const j = state.jobs.find(x => x.id === p.dataset.pin);
+  if (!j) return;
+  if (j.status !== state.tab) state.tab = j.status;
+  state.selected = j.id; render();
+  const el = $("job-" + j.id); if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+});
+$("fitBtn").addEventListener("click", () => { state.view = "fit"; renderMap(); });
+$("metroBtn").addEventListener("click", () => { state.view = "metro"; renderMap(); });
+["pCrews", "pStops", "pMins", "pHours", "pMode", "pDate"].forEach(id => $(id).addEventListener("change", () => {
+  render();
+  if (id !== "pDate") persistPlanForm();
+}));
+let persistTimer = null;
+function persistPlanForm() {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    const o = planOptions();
+    queue(() => saveDoc("meta/settings", { ...state.settings, crews: o.crews, maxStops: o.maxStops, minutesPerJob: o.minutesPerJob, dayHours: o.dayHours, mode: o.mode }));
+  }, 600);
+}
+
+$("exportBtn").addEventListener("click", () => {
+  const day = state.plan && state.plan.days[0];
+  if (!day) { flash("planMsg", "There are no waiting jobs to export.", "err"); return; }
+  const n = day.routes.reduce((s, r) => s + r.stops.length, 0);
+  $("planConfirm").innerHTML = `<div class="confirm">Book ${n} jobs for ${escapeHtml(niceDate(day.date))} and mark them scheduled?
+    <button class="small primary" id="exYes" type="button">Export</button><button class="small" id="exNo" type="button">Not yet</button></div>`;
+});
+$("planConfirm").addEventListener("click", async ev => {
+  if (ev.target.id === "exNo") { $("planConfirm").innerHTML = ""; return; }
+  if (ev.target.id !== "exYes") return;
+  $("planConfirm").innerHTML = "";
+  const day = state.plan && state.plan.days[0];
+  if (!day) return;
+  const ex = exportRecord(day);
+  try {
+    await queue(() => saveDoc("exports/" + day.date, ex));
+    for (const r of day.routes) for (const s of r.stops) await queue(() => patchJob(s.job.id, { status: "scheduled", scheduledDate: day.date, crew: r.crew, stopOrder: s.order }));
+    flash("planMsg", `Booked ${ex.routes.reduce((s, r) => s + r.stops.length, 0)} jobs for ${niceDate(day.date)}. Download the crew sheets below, or copy each crew's list to text them.`, "ok");
+  } catch (e) { flash("planMsg", "Couldn't finish the export: " + (e.message || e.code), "err"); }
+});
+$("rollBtn").addEventListener("click", () => {
+  const n = state.jobs.filter(j => j.status === "scheduled").length;
+  if (!n) { flash("planMsg", "There are no scheduled jobs to return.", "info"); return; }
+  $("planConfirm").innerHTML = `<div class="confirm">Move ${n} scheduled job${n === 1 ? "" : "s"} that aren't marked Done back to Waiting? They keep their original call time, so they go first.
+    <button class="small primary" id="rollYes" type="button">Move them back</button><button class="small" id="exNo" type="button">Cancel</button></div>`;
+});
+document.addEventListener("click", async ev => {
+  if (ev.target.id !== "rollYes") return;
+  $("planConfirm").innerHTML = "";
+  const list = state.jobs.filter(j => j.status === "scheduled");
+  for (const j of list) await queue(() => patchJob(j.id, { status: "new", scheduledDate: "", crew: "", stopOrder: null }));
+  flash("planMsg", `${list.length} unfinished jobs are back in Waiting.`, "ok");
+});
+$("exports").addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-ex]");
+  if (!b) return;
+  const ex = state.exports.find(x => x.date === b.dataset.date);
+  if (!ex) return;
+  if (b.dataset.ex === "sheet") save(`crew-sheets-${ex.date}.html`, new Blob([sheetFor(ex)], { type: "text/html" }));
+  if (b.dataset.ex === "csv") save(`schedule-${ex.date}.csv`, new Blob([csvFor(ex)], { type: "text/csv" }));
+  if (b.dataset.ex === "sms") { const r = ex.routes[+b.dataset.i]; copy(smsFor(ex, r), `Copied ${r.crew}'s day. Paste it into a text to them.`); }
+});
+$("syncBtn").addEventListener("click", runSync);
+
+// Settings dialog
+function fillSettings() {
+  const s = state.settings;
+  $("sDepot").value = s.depotAddress || ""; $("sStart").value = s.startTime || "08:00"; $("sSpeed").value = s.speed;
+  $("sInbox").value = s.inbox || ""; $("sIgnore").value = (s.ignore || []).join(", "); $("sLook").value = s.lookbackHours; $("sTranscripts").checked = !!s.transcripts;
+  $("sMsg").innerHTML = "";
+}
+$("settingsBtn").addEventListener("click", () => { fillSettings(); $("settings").showModal(); });
+$("sClose").addEventListener("click", () => $("settings").close());
+$("sSave").addEventListener("click", async () => {
+  const depotAddress = $("sDepot").value.trim() || "Edmonton, AB";
+  const parsed = extractAddress(depotAddress);
+  let loc = locateOffline(parsed ? parsed.text : depotAddress);
+  if (loc.geo !== "grid" && sample) {
+    try {
+      const r = await sample.json(`Give the latitude and longitude of this address in the Edmonton, Alberta region as JSON {"lat":..,"lng":..}: ${depotAddress}`, { modelTier: "quick" });
+      if (r && typeof r.lat === "number" && r.lat > REGION.latMin && r.lat < REGION.latMax && r.lng > REGION.lngMin && r.lng < REGION.lngMax) loc = { lat: r.lat, lng: r.lng };
+    } catch (_) {}
+  }
+  const next = { ...state.settings, depotAddress, depotLat: loc.lat ?? DEFAULTS.depotLat, depotLng: loc.lng ?? DEFAULTS.depotLng,
+    startTime: $("sStart").value || "08:00", speed: Math.max(10, +$("sSpeed").value || 40), inbox: $("sInbox").value.trim() || "Kodiak Roofing",
+    ignore: $("sIgnore").value.split(/[,\n]/).map(x => x.trim()).filter(Boolean), lookbackHours: Math.max(1, +$("sLook").value || 48), transcripts: $("sTranscripts").checked };
+  try { await queue(() => saveDoc("meta/settings", next)); flash("sMsg", "Saved.", "ok"); }
+  catch (e) { flash("sMsg", "Couldn't save: " + (e.message || e.code), "err"); }
+});
+$("exAdd").addEventListener("click", async () => {
+  const lines = ["11250 35 Ave NW", "11330 36 Ave NW", "2804 66 St NW", "2715 68 St NW", "2440 64 St NW", "9459 55 Ave NW", "7205 34 Ave NW",
+    "10234 82 Ave NW", "8215 104 St NW", "9670 86 St NW", "10621 63 St NW", "11210 44 St NW", "7671 107 Ave NW", "13410 127 St NW",
+    "13520 128 St NW", "13305 125 St NW", "15011 97 St NW", "14211 24A St NW", "17504 87 Ave NW", "8710 178 St NW", "8805 180 St NW",
+    "19280 99 Ave NW", "10347 220 St NW", "17710 10 Ave SW", "12510 153 Ave NW", "16211 95 Ave NW", "5004 106 Ave NW", "3120 132 Ave NW",
+    "4420 118 Ave NW", "6212 144 Ave NW"];
+  const notes = ["shingles blew off the back", "missing shingles on the garage", "water dripping in upstairs bedroom", "ridge cap lifted", "wind tore shingles off front slope"];
+  const base = Date.now() - 30 * 3600000;
+  for (let i = 0; i < lines.length; i++) {
+    const job = jobFromText({ address: lines[i], notes: notes[i % notes.length], source: "example" });
+    job.name = "Example " + (i + 1); job.receivedAt = new Date(base + i * 3600000).toISOString();
+    await queue(() => putJob(job));
+  }
+  flash("sMsg", "Added 30 example jobs.", "ok");
+});
+$("exClear").addEventListener("click", async () => {
+  const ex = state.jobs.filter(j => j.source === "example");
+  for (const j of ex) await queue(() => removeJob(j.id));
+  flash("sMsg", `Removed ${ex.length} example jobs.`, "ok");
+});
+window.addEventListener("resize", () => { clearTimeout(window.__rz); window.__rz = setTimeout(renderMap, 150); });
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+$("pDate").value = isoDate(new Date(Date.now() + 86400000));
+settingsToPlanForm();
+render();
+(async () => {
+  const use = name => (window.claude && window.claude.use ? window.claude.use(name).catch(() => null) : Promise.resolve(null));
+  const [d, m, sm, dl] = await Promise.all([use("db"), use("mcp"), use("sample"), use("downloads")]);
+  db = d; mcp = m; sample = sm; downloads = dl;
+  if (!mcp) $("syncBtn").title = "Quo sync works when this page is open on claude.ai";
+  if (!db) {
+    $("notice").hidden = false;
+    $("notice").textContent = "Jobs added here are only kept until you close this tab. Open the page on claude.ai, signed in, to save them for your team.";
+    return;
+  }
+  const fail = e => { $("notice").hidden = false; $("notice").textContent = "Lost connection to the saved job list (" + (e && e.code || "error") + "). Reload the page."; };
+  db.collection("jobs").onSnapshot(snap => { state.jobs = snap.docs.map(x => ({ ...x.data(), id: x.id })); render(); }, fail);
+  db.doc("meta/settings").onSnapshot(snap => { state.settings = { ...DEFAULTS, ...(snap.exists ? snap.data() : {}) }; settingsToPlanForm(); render(); }, fail);
+  db.doc("meta/sync").onSnapshot(snap => { state.sync = snap.exists ? { ...snap.data() } : {}; }, fail);
+  db.collection("exports").onSnapshot(snap => { state.exports = snap.docs.map(x => x.data()).sort((a, b) => b.date.localeCompare(a.date)); renderExports(); }, fail);
+})();
+</script>
